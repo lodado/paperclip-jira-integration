@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   verifyJiraPollRequest,
   resolvePollBearerSecret,
+  isJiraPollDevAuthBypass,
 } from "@/server/integrations/jira/poll-auth";
 import { runJiraPoll } from "@/server/integrations/jira/poll";
 
@@ -10,15 +11,19 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 async function handlePoll(request: Request) {
-  if (!resolvePollBearerSecret()) {
-    return NextResponse.json(
-      { error: "CRON_SECRET or JIRA_POLL_SECRET is not configured" },
-      { status: 500 },
-    );
-  }
+  const devBypass = isJiraPollDevAuthBypass();
 
-  if (!verifyJiraPollRequest(request)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!devBypass) {
+    if (!resolvePollBearerSecret()) {
+      return NextResponse.json(
+        { error: "CRON_SECRET or JIRA_POLL_SECRET is not configured" },
+        { status: 500 },
+      );
+    }
+
+    if (!verifyJiraPollRequest(request)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   try {

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolvePollBearerSecret, verifyJiraPollRequest } from "../poll-auth";
+import {
+  resolvePollBearerSecret,
+  verifyJiraPollRequest,
+  isJiraPollDevAuthBypass,
+} from "../poll-auth";
 
 describe("poll-auth", () => {
   beforeEach(() => {
@@ -37,5 +41,15 @@ describe("poll-auth", () => {
     vi.stubEnv("JIRA_POLL_SECRET", "secret-token");
     const request = new Request("http://localhost");
     expect(verifyJiraPollRequest(request)).toBe(false);
+  });
+
+  it("isJiraPollDevAuthBypass is true when NODE_ENV is development", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    expect(isJiraPollDevAuthBypass()).toBe(true);
+  });
+
+  it("isJiraPollDevAuthBypass is false when NODE_ENV is production", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    expect(isJiraPollDevAuthBypass()).toBe(false);
   });
 });

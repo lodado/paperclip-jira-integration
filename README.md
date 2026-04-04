@@ -32,7 +32,7 @@ pnpm build && pnpm start   # 프로덕션
 ### 폴링
 
 1. 스케줄(예: Vercel Cron **5분마다**)이 `GET /integrations/jira/poll`을 호출합니다. 수동으로도 같은 URL에 `Authorization: Bearer`를 붙여 호출할 수 있습니다.
-2. 서버가 Jira REST `POST .../search`로 `updated`가 최근 **N분** 이내인 이슈를 가져옵니다. 기본 JQL은 `updated >= -10m`이며, 5분 주기와 겹침을 두어 누락을 줄입니다. `JIRA_POLL_LOOKBACK_MINUTES`로 조정합니다.
+2. 서버가 Jira Cloud REST `POST .../rest/api/3/search/jql`로 `updated`가 최근 **N분** 이내인 이슈를 가져옵니다. 기본 JQL은 `updated >= -10m`이며, 5분 주기와 겹침을 두어 누락을 줄입니다. `JIRA_POLL_LOOKBACK_MINUTES`로 조정합니다.
 3. 각 이슈를 내부 이벤트로 정규화한 뒤 **같은** `processJiraWebhookEvent`로 Paperclip에 반영합니다. 멱등 키는 `poll:{cloudId}:{issueId}:{fields.updated}` 형태입니다.
 
 ```mermaid
@@ -67,6 +67,8 @@ sequenceDiagram
 
 1. [Atlassian 계정 API 토큰](https://id.atlassian.com/manage-profile/security/api-tokens)을 만들고, `JIRA_ATLASSIAN_EMAIL` + `JIRA_ATLASSIAN_API_TOKEN`(또는 `ATLASSIAN_EMAIL` + `JIRA_API_TOKEN`)을 설정합니다.
 2. `CRON_SECRET` 또는 `JIRA_POLL_SECRET`에 임의의 긴 문자열을 넣습니다. Vercel에서는 대시보드에 **`CRON_SECRET`**을 등록하면 Cron 요청에 `Authorization: Bearer <CRON_SECRET>`이 붙습니다. 로컬에서 수동 호출할 때도 같은 값을 헤더에 넣습니다.
+
+   로컬에서 `pnpm dev`(`NODE_ENV=development`)일 때는 **Bearer 없이** 같은 URL을 호출해도 됩니다. 프로덕션·`pnpm start`는 반드시 Bearer가 필요합니다.
 
    ```bash
    curl -sS -H "Authorization: Bearer $JIRA_POLL_SECRET" \

@@ -101,9 +101,7 @@ describe("runJiraPoll", () => {
         return new Response(
           JSON.stringify({
             issues: [jiraIssue],
-            total: 1,
-            startAt: 0,
-            maxResults: 50,
+            isLast: true,
           }),
           { status: 200 },
         );
@@ -183,9 +181,7 @@ describe("runJiraPoll", () => {
         return new Response(
           JSON.stringify({
             issues: [jiraIssue],
-            total: 1,
-            startAt: 0,
-            maxResults: 50,
+            isLast: true,
           }),
           { status: 200 },
         );
@@ -226,5 +222,83 @@ describe("runJiraPoll", () => {
 
     expect(paperclipCallsAfterFirst).toBe(1);
     expect(paperclipCallsAfterSecond).toBe(1);
+  });
+
+  it("paginates Jira /search/jql with nextPageToken until isLast", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-poll-page-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+
+    const mkIssue = (id: string, key: string) => ({
+      id,
+      key,
+      self: `https://example/rest/api/3/issue/${id}`,
+      fields: {
+        summary: key,
+        updated: "2024-06-01T12:00:00.000+0000",
+        priority: { name: "Low" },
+        status: { name: "To Do" },
+        issuetype: { name: "Task" },
+        project: { id: "20001", key: "PROJ" },
+      },
+    });
+
+    let jiraCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("api.atlassian.com")) {
+          jiraCalls += 1;
+          if (jiraCalls === 1) {
+            expect(url).toContain("/rest/api/3/search/jql");
+            const body = JSON.parse(init?.body as string);
+            expect(body.jql).toContain("updated >=");
+            expect(body.nextPageToken).toBeUndefined();
+            return new Response(
+              JSON.stringify({
+                issues: [mkIssue("1", "PROJ-1")],
+                isLast: false,
+                nextPageToken: "token-page-2",
+              }),
+              { status: 200 },
+            );
+          }
+          const body = JSON.parse(init?.body as string);
+          expect(body.nextPageToken).toBe("token-page-2");
+          return new Response(
+            JSON.stringify({
+              issues: [mkIssue("2", "PROJ-2")],
+              isLast: true,
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("paperclip.example")) {
+          return new Response(JSON.stringify({ id: `PC-${jiraCalls}` }), {
+            status: 200,
+          });
+        }
+        return new Response("unexpected", { status: 500 });
+      },
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runJiraPoll({
+      fetchImpl: fetchMock,
+      auth: { email: "u@e.com", apiToken: "t", cloudId: "cloud-1" },
+      repository,
+      environment: makePollEnvironment(),
+      lookbackMinutes: 10,
+    });
+
+    expect(jiraCalls).toBe(2);
+    expect(result.scanned).toBe(2);
+    expect(
+      fetchMock.mock.calls.filter(([u]) =>
+        String(u).includes("api.atlassian.com"),
+      ).length,
+    ).toBe(2);
   });
 });

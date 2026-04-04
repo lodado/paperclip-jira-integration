@@ -1,5 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 
+/** `next dev` only — production and `next start` still require Bearer. */
+export function isJiraPollDevAuthBypass(): boolean {
+  return process.env.NODE_ENV === "development";
+}
+
 export function resolvePollBearerSecret(): string | null {
   const fromCron = process.env.CRON_SECRET?.trim();
   const fromPoll = process.env.JIRA_POLL_SECRET?.trim();

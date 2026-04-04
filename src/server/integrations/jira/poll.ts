@@ -27,6 +27,9 @@ export type JiraSearchIssue = {
 
 export type JiraSearchResponse = {
   issues?: JiraSearchIssue[];
+  /** Jira Cloud enhanced search (`/search/jql`) — absent on last page */
+  nextPageToken?: unknown;
+  isLast?: unknown;
   total?: unknown;
   startAt?: unknown;
   maxResults?: unknown;
@@ -163,7 +166,7 @@ async function postJiraSearch(
 ): Promise<JiraSearchResponse> {
   const url = `https://api.atlassian.com/ex/jira/${encodeURIComponent(
     auth.cloudId,
-  )}/rest/api/3/search`;
+  )}/rest/api/3/search/jql`;
 
   const response = await fetchImpl(url, {
     method: "POST",
@@ -195,39 +198,47 @@ const SEARCH_FIELDS = [
   "updated",
 ];
 
+function nextPageTokenFromResponse(page: JiraSearchResponse): string | null {
+  const t = page.nextPageToken;
+  return typeof t === "string" && t.trim() ? t.trim() : null;
+}
+
 async function fetchAllIssuesMatchingJql(
   auth: JiraAtlassianAuth,
   jql: string,
   fetchImpl: typeof fetch,
 ): Promise<JiraSearchIssue[]> {
   const collected: JiraSearchIssue[] = [];
-  let startAt = 0;
   const maxResults = 50;
+  let nextPageToken: string | null = null;
+  let pageCount = 0;
+  const maxPages = 500;
 
-  while (true) {
-    const page = await postJiraSearch(
-      auth,
-      {
-        jql,
-        fields: SEARCH_FIELDS,
-        maxResults,
-        startAt,
-      },
-      fetchImpl,
-    );
+  while (pageCount < maxPages) {
+    pageCount += 1;
+    const body: Record<string, unknown> = {
+      jql,
+      fields: SEARCH_FIELDS,
+      maxResults,
+    };
+    if (nextPageToken) {
+      body.nextPageToken = nextPageToken;
+    }
+
+    const page = await postJiraSearch(auth, body, fetchImpl);
 
     const issues = Array.isArray(page.issues) ? page.issues : [];
     collected.push(...issues);
 
-    const total =
-      typeof page.total === "number" && Number.isFinite(page.total)
-        ? page.total
-        : collected.length;
-
-    startAt += issues.length;
-    if (issues.length === 0 || startAt >= total) {
+    if (page.isLast === true || issues.length === 0) {
       break;
     }
+
+    const token = nextPageTokenFromResponse(page);
+    if (!token) {
+      break;
+    }
+    nextPageToken = token;
   }
 
   return collected;
