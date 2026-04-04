@@ -1,6 +1,38 @@
 {
   "schemaVersion": 1,
-  "externalIssueLinks": {},
-  "idempotency": {},
-  "eventLogs": {}
+  "externalIssueLinks": {
+    "jira:e3ec21de-f785-4322-abdb-cd7540cd1820:10006": {
+      "provider": "jira",
+      "externalKey": "jira:e3ec21de-f785-4322-abdb-cd7540cd1820:10006",
+      "cloudId": "e3ec21de-f785-4322-abdb-cd7540cd1820",
+      "externalIssueId": "10006",
+      "externalIssueKey": "KAN-1",
+      "internalIssueId": "5f8e4937-8623-4567-872e-ac7441980619",
+      "createdAt": "2026-04-04T16:46:18.054Z",
+      "updatedAt": "2026-04-04T16:46:18.054Z"
+    }
+  },
+  "idempotency": {
+    "jira:event:poll:e3ec21de-f785-4322-abdb-cd7540cd1820:10006:2026-04-05T00:58:11.386+0900": {
+      "idempotencyKey": "jira:event:poll:e3ec21de-f785-4322-abdb-cd7540cd1820:10006:2026-04-05T00:58:11.386+0900",
+      "externalEventId": "poll:e3ec21de-f785-4322-abdb-cd7540cd1820:10006:2026-04-05T00:58:11.386+0900",
+      "externalKey": "jira:e3ec21de-f785-4322-abdb-cd7540cd1820:10006",
+      "payloadHash": "7b2ea9a24e6c0e402e0d9a463023b83dff2ee677abaed58fad174ae6dd4a227b",
+      "status": "processed",
+      "createdAt": "2026-04-04T16:46:18.033Z",
+      "updatedAt": "2026-04-04T16:46:18.055Z"
+    }
+  },
+  "eventLogs": {
+    "jira:e3ec21de-f785-4322-abdb-cd7540cd1820:10006": {
+      "logKey": "jira:e3ec21de-f785-4322-abdb-cd7540cd1820:10006",
+      "externalEventId": "poll:e3ec21de-f785-4322-abdb-cd7540cd1820:10006:2026-04-05T00:58:11.386+0900",
+      "externalKey": "jira:e3ec21de-f785-4322-abdb-cd7540cd1820:10006",
+      "eventType": "issue.updated",
+      "status": "processed",
+      "error": null,
+      "payloadHash": "7b2ea9a24e6c0e402e0d9a463023b83dff2ee677abaed58fad174ae6dd4a227b",
+      "processedAt": "2026-04-04T16:46:18.055Z"
+    }
+  }
 }
