@@ -251,7 +251,7 @@ function buildIssueDescription(event: JiraWebhookNormalizedEvent): string {
   return lines.join("\n");
 }
 
-/** Markdown plan draft from Jira summary/body; used only when creating a Paperclip issue. */
+/** Markdown plan draft from Jira summary/body; Paperclip Jira integration reads this block on create. */
 function buildInitialPlanDraftFromJira(
   event: JiraWebhookNormalizedEvent,
 ): string {

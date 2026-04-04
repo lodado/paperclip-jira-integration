@@ -15,7 +15,7 @@ pnpm dev
 ```
 
 개발 서버 기본 주소: `http://localhost:3000`  
-폴링 트리거: **`GET` 또는 `POST /integrations/jira/poll`** (`Authorization: Bearer …` — 아래 [폴링](#jira-rest-폴링-5분-간격) 참고)
+폴링 트리거: **`GET` 또는 `POST /integrations/jira/poll`** (`Authorization: Bearer …` — 아래 [폴링](#jira-rest-폴링-5분-간격) 참고). 선택 쿼리: `jql`, `lookback` / `lookbackMinutes`.
 
 ```bash
 pnpm type-check   # TypeScript
@@ -76,6 +76,19 @@ sequenceDiagram
    ```
 
 3. 선택: `JIRA_POLL_JQL`에 `AND project = PROJ`처럼 **시간 조건 뒤에 붙는** JQL 조각을 넣어 범위를 줄입니다.
+
+4. 선택: **쿼리스트링**으로 요청마다 env를 덮어씁니다 (값이 있을 때만). 프로덕션에서는 Bearer가 있는 호출자만 사용할 수 있습니다.
+
+   | 파라미터          | 별칭       | 설명                                                                               |
+   | ----------------- | ---------- | ---------------------------------------------------------------------------------- |
+   | `jql`             | `extraJql` | `updated >= -Nm` **뒤에 이어 붙는** JQL (`AND project = KAN` 등). URL 인코딩 필요. |
+   | `lookbackMinutes` | `lookback` | `N` 분 lookback (1–1440). 미설정 시 `JIRA_POLL_LOOKBACK_MINUTES` / 기본값.         |
+
+   ```bash
+   curl -sS -G --data-urlencode 'jql=AND project = KAN AND statusCategory = "To Do"' \
+     --data-urlencode 'lookback=60' \
+     http://localhost:3000/integrations/jira/poll
+   ```
 
 ---
 
@@ -140,6 +153,7 @@ Paperclip 이슈에 넣을 `projectId`는 다음 순서로 결정됩니다.
 | 상태 | 의미                                                                                        |
 | ---- | ------------------------------------------------------------------------------------------- |
 | 200  | `{ ok: true, scanned, results }` — `results`는 이슈별 처리 결과(성공 시 `outcome`/`reason`) |
+| 400  | 쿼리 `lookback` / `lookbackMinutes`가 범위 밖이거나 잘못된 값                               |
 | 401  | `Authorization: Bearer` 없음·불일치                                                         |
 | 500  | `CRON_SECRET`/`JIRA_POLL_SECRET` 미설정, Jira 검색 실패, 또는 처리 중 예외                  |
 
@@ -188,11 +202,58 @@ const result = await processJiraWebhookEvent({
 ## Paperclip API (이 코드가 호출하는 엔드포인트)
 
 - **이슈 생성:** `POST /api/companies/{companyId}/issues`  
-  본문: `title`, `description`(Jira 메타 + **Plan (draft, from Jira)** 구역), 선택적으로 `status`, `priority`, `projectId`, `assigneeAgentId`(환경변수로만, 신규 생성 시에만)
+  본문: `title`, `description`(Jira 메타 + 본문 + **Plan (draft, from Jira)** — Paperclip Jira 연동이 이 형식을 소비), 선택적으로 `status`, `priority`, `projectId`, `assigneeAgentId`(환경변수로만, 신규 생성 시에만)
 - **이슈 갱신:** `PATCH /api/issues/{internalIssueId}`  
-  변경된 Jira 필드에 맞춰 부분 업데이트
+  변경된 Jira 필드에 맞춰 부분 업데이트 (폴링은 `changes`가 비어 있어 제목·설명·상태 등이 한꺼번에 반영될 수 있음; 설명은 생성 시와 달리 **메타 + Jira 본문**만 PATCH — Paperclip 쪽 Jira 컨트롤러와 동일한 구분)
+
+### Paperclip 소비용 `description` 입력 계약 (발신: 이 레포)
+
+Paperclip **Jira 컨트롤러** 또는 이슈 후처리가 파싱할 때 쓸 수 있도록, 아래 문자열은 **의도적으로 고정**되어 있습니다 (`sync.ts`의 `buildIssueDescription`, `buildCreateIssueDescription`).
+
+| 구간               | 포함 시점        | 안정 토큰 / 구조                                                                                            |
+| ------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| 헤더               | POST·PATCH 공통  | 첫 줄: `Synced from Jira issue {KEY}.` (끝에 마침표)                                                        |
+| 메타               | POST·PATCH 공통  | 빈 줄 다음 `- Source: {url\|n/a}`, `- Jira Issue ID: {id}`, `- Event Type: {eventType}`                     |
+| Jira 본문          | POST·PATCH 공통  | (Jira 설명이 있으면) 빈 줄 + `Jira description:` + 빈 줄 + **평문** (`description-text.ts`로 ADF→텍스트)    |
+| 구분선 + Plan 초안 | **POST(신규)만** | `\n\n---\n\n` 뒤에 `## Plan (draft, from Jira)` … `### Objective` … 선택 `### Context (Jira description)` … |
+
+**PATCH 동작 (폴링·웹훅 공통):** `description` 필드에는 위 표에서 «POST·PATCH 공통» 행만 들어갑니다. `## Plan (draft, from Jira)` 블록은 **갱신 경로에서는 보내지 않습니다.** Paperclip이 `PUT /api/issues/{id}/documents/plan`으로 관리하는 본문 플랜과의 관계는:
+
+- **권장 소비 정책:** Jira에서 온 Plan 초안은 **생성 시점에만** description에 실립니다. 이후 주기적 PATCH는 메타·Jira 본문 동기화용이므로, 이미 존재하는 Paperclip `plan` 문서를 **덮어쓰거나 초기화하는 트리거로 사용하지 않는 것**이 안전합니다(의도치 않은 초기화 방지).
+- **선택:** 신규 이슈 POST 직후, 컨트롤러가 description 안의 `## Plan (draft, from Jira)`를 **한 번** 읽어 `documents/plan` 시드로 옮길 수 있습니다. 그 후에는 PATCH description만으로 plan을 갱신하지 않습니다.
+
+**외부 ID / 매핑:** 이 서비스는 Paperclip에 별도 `externalId` 필드를 보내지 않고, 로컬 저장소에 `jira:{cloudId}:{issueId}` ↔ Paperclip 이슈 UUID를 보관합니다. Paperclip에 퍼스트클래스 연동 필드가 생기면 그때 페이로드에 추가하는 것이 자연스럽습니다.
+
+**에이전트 워크플로:** 신규 생성 시에만 `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`(또는 `PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`)로 `assigneeAgentId`를 넣을 수 있습니다. `goalId`·`parentId`는 현재 코드에서 설정하지 않으며, 회사 정책에 맞게 Paperclip UI에서 연결하거나 환경/매핑 확장으로 넣을 수 있습니다.
+
+#### 샘플 `POST /api/companies/{companyId}/issues`
+
+```json
+{
+  "title": "Build Jira sync",
+  "description": "Synced from Jira issue PROJ-1.\n\n- Source: https://your-domain.atlassian.net/browse/PROJ-1\n- Jira Issue ID: 10001\n- Event Type: issue.created\n\nJira description:\n\ndetails\n\n---\n\n## Plan (draft, from Jira)\n\n### Objective\nBuild Jira sync\n\n### Context (Jira description)\n\ndetails\n\n",
+  "status": "todo",
+  "priority": "high",
+  "projectId": "00000000-0000-0000-0000-000000000000",
+  "assigneeAgentId": "00000000-0000-0000-0000-000000000000"
+}
+```
+
+(`projectId` / `assigneeAgentId`는 매핑·환경에 따라 생략 가능)
+
+#### 샘플 `PATCH /api/issues/{internalIssueId}` (폴링 한 바퀴 후 설명만)
+
+```json
+{
+  "description": "Synced from Jira issue PROJ-1.\n\n- Source: https://your-domain.atlassian.net/rest/api/3/issue/10001\n- Jira Issue ID: 10001\n- Event Type: issue.updated\n\nJira description:\n\nupdated body\n\n"
+}
+```
 
 Jira 상태·우선순위 이름은 코드 안에서 Paperclip 쪽 enum 값으로 매핑됩니다(`sync.ts`의 `mapStatus`, `mapPriority`).
+
+Jira Cloud `description`이 ADF인 경우 API 수집 단계에서 **평문으로 추출**한 뒤 위 포맷에 넣습니다(`description-text.ts`).
+
+신규 Paperclip 이슈를 특정 에이전트 인박스에 넣으려면 `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`(또는 `PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`)를 설정하세요.
 
 ---
 

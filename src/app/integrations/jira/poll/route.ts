@@ -5,6 +5,7 @@ import {
   resolvePollBearerSecret,
   isJiraPollDevAuthBypass,
 } from "@/server/integrations/jira/poll-auth";
+import { parseJiraPollQueryParams } from "@/server/integrations/jira/poll-query";
 import { runJiraPoll } from "@/server/integrations/jira/poll";
 
 export const runtime = "nodejs";
@@ -27,7 +28,17 @@ async function handlePoll(request: Request) {
   }
 
   try {
-    const result = await runJiraPoll();
+    const parsed = parseJiraPollQueryParams(new URL(request.url).searchParams);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+
+    const result = await runJiraPoll({
+      ...(parsed.lookbackMinutes !== undefined && {
+        lookbackMinutes: parsed.lookbackMinutes,
+      }),
+      ...(parsed.extraJql !== undefined && { extraJql: parsed.extraJql }),
+    });
     return NextResponse.json({ ok: true, ...result }, { status: 200 });
   } catch (error) {
     return NextResponse.json(

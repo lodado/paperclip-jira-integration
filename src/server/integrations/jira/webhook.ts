@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+import { extractPlainTextFromJiraDescriptionField } from "./description-text";
+
 export type JiraWebhookNormalizedEventType = "issue.created" | "issue.updated";
 
 export type JiraWebhookNormalizedIssue = {
@@ -62,10 +64,11 @@ type JiraWebhookPayload = {
   };
 };
 
-const SUPPORTED_WEBHOOK_EVENTS: Record<string, JiraWebhookNormalizedEventType> = {
-  "jira:issue_created": "issue.created",
-  "jira:issue_updated": "issue.updated",
-};
+const SUPPORTED_WEBHOOK_EVENTS: Record<string, JiraWebhookNormalizedEventType> =
+  {
+    "jira:issue_created": "issue.created",
+    "jira:issue_updated": "issue.updated",
+  };
 
 function toStringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
@@ -75,7 +78,9 @@ function toNumberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-export function isSupportedJiraWebhookEvent(payload: JiraWebhookPayload): boolean {
+export function isSupportedJiraWebhookEvent(
+  payload: JiraWebhookPayload,
+): boolean {
   const eventName = toStringOrNull(payload.webhookEvent);
   if (!eventName) {
     return false;
@@ -86,7 +91,7 @@ export function isSupportedJiraWebhookEvent(payload: JiraWebhookPayload): boolea
 
 export function normalizeJiraWebhookEvent(
   payload: JiraWebhookPayload,
-  headers: Headers
+  headers: Headers,
 ): JiraWebhookNormalizedEvent {
   const rawEventName = toStringOrNull(payload.webhookEvent);
   if (!rawEventName || !(rawEventName in SUPPORTED_WEBHOOK_EVENTS)) {
@@ -104,11 +109,7 @@ export function normalizeJiraWebhookEvent(
   const issueFields = issue?.fields;
   const issueDescription = issueFields?.description;
   const description =
-    typeof issueDescription === "string"
-      ? issueDescription
-      : issueDescription == null
-        ? null
-        : JSON.stringify(issueDescription);
+    extractPlainTextFromJiraDescriptionField(issueDescription);
 
   const changes = Array.isArray(payload.changelog?.items)
     ? payload.changelog.items.map((item) => ({
@@ -158,7 +159,10 @@ function extractProvidedDigest(signatureHeader: string): string {
   return trimmed;
 }
 
-function safeEqualHexDigest(expectedHex: string, providedDigest: string): boolean {
+function safeEqualHexDigest(
+  expectedHex: string,
+  providedDigest: string,
+): boolean {
   const normalizedProvided = providedDigest.toLowerCase();
   if (!/^[a-f0-9]+$/.test(normalizedProvided)) {
     return false;
@@ -185,7 +189,7 @@ function safeEqualString(expected: string, provided: string): boolean {
 
   return crypto.timingSafeEqual(
     Buffer.from(expected, "utf8"),
-    Buffer.from(provided, "utf8")
+    Buffer.from(provided, "utf8"),
   );
 }
 
@@ -215,7 +219,7 @@ export function verifyJiraWebhookSignature(params: {
     safeEqualHexDigest(expectedHex, providedDigest) ||
     safeEqualString(
       Buffer.from(expectedHex, "hex").toString("base64"),
-      providedDigest
+      providedDigest,
     )
   );
 }

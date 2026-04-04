@@ -38,7 +38,7 @@ describe("jiraSearchIssueToNormalizedEvent", () => {
         id: "10001",
         key: "PROJ-2",
         summary: "Title",
-        description: JSON.stringify({ type: "doc", content: [] }),
+        description: null,
         priority: "Medium",
         status: "In Progress",
         issueType: "Bug",

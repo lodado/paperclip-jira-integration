@@ -23,7 +23,7 @@ describe("verifyJiraWebhookSignature", () => {
         rawBody,
         secret,
         signatureHeader: `sha256=${digest}`,
-      })
+      }),
     ).toBe(true);
   });
 
@@ -38,7 +38,7 @@ describe("verifyJiraWebhookSignature", () => {
         rawBody,
         secret,
         signatureHeader: digest,
-      })
+      }),
     ).toBe(true);
   });
 
@@ -48,7 +48,7 @@ describe("verifyJiraWebhookSignature", () => {
         rawBody,
         secret,
         signatureHeader: "sha256=deadbeef",
-      })
+      }),
     ).toBe(false);
   });
 });
@@ -88,7 +88,7 @@ describe("normalizeJiraWebhookEvent", () => {
       id: "10001",
       key: "PROJ-12",
       summary: "Create webhook route",
-      description: JSON.stringify({ type: "doc", version: 1 }),
+      description: null,
       priority: "High",
       status: "To Do",
       issueType: "Task",
@@ -145,7 +145,7 @@ describe("normalizeJiraWebhookEvent", () => {
     expect(isSupportedJiraWebhookEvent(payload)).toBe(false);
 
     expect(() => normalizeJiraWebhookEvent(payload, new Headers())).toThrow(
-      "Unsupported Jira webhook event"
+      "Unsupported Jira webhook event",
     );
   });
 
@@ -156,7 +156,7 @@ describe("normalizeJiraWebhookEvent", () => {
     };
 
     expect(() => normalizeJiraWebhookEvent(payload, new Headers())).toThrow(
-      "Jira webhook payload is missing issue id/key"
+      "Jira webhook payload is missing issue id/key",
     );
   });
 });

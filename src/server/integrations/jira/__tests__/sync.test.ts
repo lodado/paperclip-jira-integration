@@ -105,6 +105,7 @@ describe("processJiraWebhookEvent", () => {
         projectId: "paperclip-project-1",
       }),
     );
+    expect(body.description).toContain("Synced from Jira issue PROJ-1");
     expect(body.description).toContain("## Plan (draft, from Jira)");
     expect(body.description).toContain("### Objective");
     expect(body.description).toContain("Build Jira sync");

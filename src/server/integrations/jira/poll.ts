@@ -1,3 +1,4 @@
+import { extractPlainTextFromJiraDescriptionField } from "./description-text";
 import type { JiraWebhookNormalizedEvent } from "./webhook";
 import { processJiraWebhookEvent, type JiraSyncEnvironment } from "./sync";
 import { JiraStorageRepository } from "./storage";
@@ -128,13 +129,7 @@ export function jiraSearchIssueToNormalizedEvent(
   }
 
   const f = issue.fields || {};
-  const issueDescription = f.description;
-  const description =
-    typeof issueDescription === "string"
-      ? issueDescription
-      : issueDescription == null
-        ? null
-        : JSON.stringify(issueDescription);
+  const description = extractPlainTextFromJiraDescriptionField(f.description);
 
   const updatedRaw = toStringOrNull(f.updated) || "";
 
