@@ -1,4 +1,4 @@
-# deepconsole-jira-integration
+# paperclip-jira-integration
 
 Jira Cloud **REST 폴링**(기본 5분 간격; `vercel.json` Cron)으로 이슈를 감지한 뒤 **Paperclip** REST API로 생성·갱신하는 Next.js(App Router) 서비스입니다. Jira 이슈와 Paperclip 내부 이슈 ID 매핑·멱등 처리·이벤트 로그는 로컬 JSON 파일(또는 지정 경로)에 저장합니다.
 
