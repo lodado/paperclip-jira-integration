@@ -1,4 +1,4 @@
-# deepconsole-jira-integration
+# paperclip-jira-integration
 
 Jira Cloud 이슈를 **REST 폴링**으로 읽어 **Paperclip** API로 이슈를 만들거나 갱신하는 Next.js(App Router) 서비스입니다. Jira↔Paperclip ID 매핑·멱등·로그는 로컬 JSON(또는 `JIRA_STORAGE_FILE`)에 둡니다.
 
