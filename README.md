@@ -161,11 +161,12 @@ Jira 웹훅에 설정한 시크릿과 **동일한 값**을 서버 환경 변수 
 
 동기화 시 `fetch`로 호출합니다. URL은 끝의 `/`가 있어도 제거 후 사용합니다.
 
-| 변수                        | 대체 변수              | 설명                                                       |
-| --------------------------- | ---------------------- | ---------------------------------------------------------- |
-| `JIRA_PAPERCLIP_API_URL`    | `PAPERCLIP_API_URL`    | Paperclip 베이스 URL (예: `https://api.example.com`)       |
-| `JIRA_PAPERCLIP_API_KEY`    | `PAPERCLIP_API_KEY`    | `Authorization: Bearer …` 에 쓰는 API 키                   |
-| `JIRA_PAPERCLIP_COMPANY_ID` | `PAPERCLIP_COMPANY_ID` | 회사(테넌트) ID — 경로 `/api/companies/{id}/issues`에 사용 |
+| 변수                                         | 대체 변수                               | 설명                                                                           |
+| -------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| `JIRA_PAPERCLIP_API_URL`                     | `PAPERCLIP_API_URL`                     | Paperclip 베이스 URL (예: `https://api.example.com`)                           |
+| `JIRA_PAPERCLIP_API_KEY`                     | `PAPERCLIP_API_KEY`                     | `Authorization: Bearer …` 에 쓰는 API 키                                       |
+| `JIRA_PAPERCLIP_COMPANY_ID`                  | `PAPERCLIP_COMPANY_ID`                  | 회사(테넌트) ID — 경로 `/api/companies/{id}/issues`에 사용                     |
+| `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID` | `PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID` | (선택) Jira→Paperclip **신규** 이슈에만 `assigneeAgentId`로 넣을 에이전트 UUID |
 
 ### Jira Cloud (필수)
 
@@ -248,6 +249,7 @@ const environment: JiraSyncEnvironment = {
   cloudId: "atlassian-cloud-id",
   defaultProjectId: "optional-paperclip-project-id",
   projectMapping: {},
+  newIssueAssigneeAgentId: null,
 };
 
 const rawBody = "...";
@@ -268,7 +270,7 @@ const result = await processJiraWebhookEvent({
 ## Paperclip API (이 코드가 호출하는 엔드포인트)
 
 - **이슈 생성:** `POST /api/companies/{companyId}/issues`  
-  본문: `title`, `description`, 선택적으로 `status`, `priority`, `projectId`
+  본문: `title`, `description`(Jira 메타 + **Plan (draft, from Jira)** 구역), 선택적으로 `status`, `priority`, `projectId`, `assigneeAgentId`(환경변수로만, 신규 생성 시에만)
 - **이슈 갱신:** `PATCH /api/issues/{internalIssueId}`  
   변경된 Jira 필드에 맞춰 부분 업데이트
 

@@ -1,9 +1,6 @@
 import crypto from "node:crypto";
 
-import {
-  JiraStorageRepository,
-  makeJiraExternalKey,
-} from "./storage";
+import { JiraStorageRepository, makeJiraExternalKey } from "./storage";
 import type { JiraWebhookNormalizedEvent } from "./webhook";
 
 type PaperclipIssueStatus =
@@ -26,6 +23,8 @@ export type JiraSyncEnvironment = {
   cloudId: string;
   defaultProjectId: string | null;
   projectMapping: JiraProjectMapping;
+  /** When set, included on **new** Paperclip issues only (`POST .../issues`), not on updates. */
+  newIssueAssigneeAgentId: string | null;
 };
 
 export type ProcessJiraWebhookEventInput = {
@@ -49,6 +48,7 @@ type CreateIssuePayload = {
   status?: PaperclipIssueStatus;
   priority?: PaperclipIssuePriority;
   projectId?: string;
+  assigneeAgentId?: string;
 };
 
 type UpdateIssuePayload = Partial<CreateIssuePayload>;
@@ -59,7 +59,9 @@ type PaperclipIssueResponse = {
 
 const JIRA_PROJECT_MAPPING_ENV = "JIRA_PROJECT_MAPPING_JSON";
 
-function toNormalizedLookupKey(value: string | null | undefined): string | null {
+function toNormalizedLookupKey(
+  value: string | null | undefined,
+): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -84,7 +86,9 @@ function parseProjectMapping(raw: string | undefined): JiraProjectMapping {
     }
 
     const mapping: JiraProjectMapping = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(
+      parsed as Record<string, unknown>,
+    )) {
       const normalizedKey = toNormalizedLookupKey(key);
       if (!normalizedKey || typeof value !== "string" || !value.trim()) {
         continue;
@@ -100,8 +104,10 @@ function parseProjectMapping(raw: string | undefined): JiraProjectMapping {
 }
 
 function resolveEnvironment(): JiraSyncEnvironment {
-  const apiUrl = process.env.JIRA_PAPERCLIP_API_URL || process.env.PAPERCLIP_API_URL;
-  const apiKey = process.env.JIRA_PAPERCLIP_API_KEY || process.env.PAPERCLIP_API_KEY;
+  const apiUrl =
+    process.env.JIRA_PAPERCLIP_API_URL || process.env.PAPERCLIP_API_URL;
+  const apiKey =
+    process.env.JIRA_PAPERCLIP_API_KEY || process.env.PAPERCLIP_API_KEY;
   const companyId =
     process.env.JIRA_PAPERCLIP_COMPANY_ID || process.env.PAPERCLIP_COMPANY_ID;
   const cloudId = process.env.JIRA_CLOUD_ID;
@@ -115,12 +121,19 @@ function resolveEnvironment(): JiraSyncEnvironment {
   }
 
   if (!companyId?.trim()) {
-    throw new Error("JIRA_PAPERCLIP_COMPANY_ID or PAPERCLIP_COMPANY_ID is required");
+    throw new Error(
+      "JIRA_PAPERCLIP_COMPANY_ID or PAPERCLIP_COMPANY_ID is required",
+    );
   }
 
   if (!cloudId?.trim()) {
     throw new Error("JIRA_CLOUD_ID is required");
   }
+
+  const newIssueAssigneeAgentId =
+    process.env.JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID?.trim() ||
+    process.env.PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID?.trim() ||
+    null;
 
   return {
     apiUrl: apiUrl.trim().replace(/\/+$/, ""),
@@ -129,6 +142,7 @@ function resolveEnvironment(): JiraSyncEnvironment {
     cloudId: cloudId.trim(),
     defaultProjectId: process.env.JIRA_DEFAULT_PROJECT_ID?.trim() || null,
     projectMapping: parseProjectMapping(process.env[JIRA_PROJECT_MAPPING_ENV]),
+    newIssueAssigneeAgentId,
   };
 }
 
@@ -173,7 +187,9 @@ function mapStatus(status: string | null): PaperclipIssueStatus | undefined {
   return undefined;
 }
 
-function mapPriority(priority: string | null): PaperclipIssuePriority | undefined {
+function mapPriority(
+  priority: string | null,
+): PaperclipIssuePriority | undefined {
   const normalized = toNormalizedLookupKey(priority);
   if (!normalized) {
     return undefined;
@@ -203,7 +219,7 @@ function mapProjectId(
     jiraProjectId: string | null;
     jiraProjectKey: string | null;
   },
-  environment: JiraSyncEnvironment
+  environment: JiraSyncEnvironment,
 ): string | undefined {
   const idLookup = toNormalizedLookupKey(params.jiraProjectId);
   const keyLookup = toNormalizedLookupKey(params.jiraProjectKey);
@@ -235,11 +251,42 @@ function buildIssueDescription(event: JiraWebhookNormalizedEvent): string {
   return lines.join("\n");
 }
 
+/** Markdown plan draft from Jira summary/body; used only when creating a Paperclip issue. */
+function buildInitialPlanDraftFromJira(
+  event: JiraWebhookNormalizedEvent,
+): string {
+  const summary = (event.issue.summary || event.issue.key).trim();
+  const desc = event.issue.description?.trim();
+
+  const parts = [
+    "## Plan (draft, from Jira)",
+    "",
+    "### Objective",
+    summary,
+    "",
+  ];
+
+  if (desc) {
+    parts.push("### Context (Jira description)", "", desc, "");
+  }
+
+  return parts.join("\n");
+}
+
+function buildCreateIssueDescription(
+  event: JiraWebhookNormalizedEvent,
+): string {
+  return `${buildIssueDescription(event)}\n\n---\n\n${buildInitialPlanDraftFromJira(event)}`;
+}
+
 function computePayloadHash(rawBody: string): string {
   return crypto.createHash("sha256").update(rawBody, "utf8").digest("hex");
 }
 
-function resolveIdempotencyKey(event: JiraWebhookNormalizedEvent, payloadHash: string): string {
+function resolveIdempotencyKey(
+  event: JiraWebhookNormalizedEvent,
+  payloadHash: string,
+): string {
   const externalEventId = event.externalEventId?.trim();
   if (externalEventId) {
     return `jira:event:${externalEventId}`;
@@ -264,7 +311,10 @@ function getChangedFieldSet(event: JiraWebhookNormalizedEvent): Set<string> {
   return changedFields;
 }
 
-function shouldApplyField(changedFields: Set<string>, aliases: string[]): boolean {
+function shouldApplyField(
+  changedFields: Set<string>,
+  aliases: string[],
+): boolean {
   if (changedFields.size === 0) {
     return true;
   }
@@ -275,7 +325,7 @@ function shouldApplyField(changedFields: Set<string>, aliases: string[]): boolea
 async function fetchPaperclipJson<T>(
   environment: JiraSyncEnvironment,
   path: string,
-  init: RequestInit
+  init: RequestInit,
 ): Promise<T> {
   const response = await fetch(`${environment.apiUrl}${path}`, {
     ...init,
@@ -289,7 +339,7 @@ async function fetchPaperclipJson<T>(
   if (!response.ok) {
     const message = await response.text();
     throw new Error(
-      `Paperclip API ${init.method || "GET"} ${path} failed (${response.status}): ${message || "unknown"}`
+      `Paperclip API ${init.method || "GET"} ${path} failed (${response.status}): ${message || "unknown"}`,
     );
   }
 
@@ -298,11 +348,11 @@ async function fetchPaperclipJson<T>(
 
 function buildCreatePayload(
   event: JiraWebhookNormalizedEvent,
-  environment: JiraSyncEnvironment
+  environment: JiraSyncEnvironment,
 ): CreateIssuePayload {
   const payload: CreateIssuePayload = {
     title: event.issue.summary || event.issue.key,
-    description: buildIssueDescription(event),
+    description: buildCreateIssueDescription(event),
   };
 
   const mappedStatus = mapStatus(event.issue.status);
@@ -316,11 +366,18 @@ function buildCreatePayload(
   }
 
   const mappedProjectId = mapProjectId(
-    { jiraProjectId: event.issue.projectId, jiraProjectKey: event.issue.projectKey },
-    environment
+    {
+      jiraProjectId: event.issue.projectId,
+      jiraProjectKey: event.issue.projectKey,
+    },
+    environment,
   );
   if (mappedProjectId) {
     payload.projectId = mappedProjectId;
+  }
+
+  if (environment.newIssueAssigneeAgentId) {
+    payload.assigneeAgentId = environment.newIssueAssigneeAgentId;
   }
 
   return payload;
@@ -328,7 +385,7 @@ function buildCreatePayload(
 
 function buildUpdatePayload(
   event: JiraWebhookNormalizedEvent,
-  environment: JiraSyncEnvironment
+  environment: JiraSyncEnvironment,
 ): UpdateIssuePayload {
   const changedFields = getChangedFieldSet(event);
   const payload: UpdateIssuePayload = {};
@@ -360,8 +417,11 @@ function buildUpdatePayload(
 
   if (shouldApplyField(changedFields, ["project", "projectid", "projectkey"])) {
     const mappedProjectId = mapProjectId(
-      { jiraProjectId: event.issue.projectId, jiraProjectKey: event.issue.projectKey },
-      environment
+      {
+        jiraProjectId: event.issue.projectId,
+        jiraProjectKey: event.issue.projectKey,
+      },
+      environment,
     );
     if (mappedProjectId) {
       payload.projectId = mappedProjectId;
@@ -373,7 +433,7 @@ function buildUpdatePayload(
 
 async function createPaperclipIssue(
   event: JiraWebhookNormalizedEvent,
-  environment: JiraSyncEnvironment
+  environment: JiraSyncEnvironment,
 ): Promise<string> {
   const body = buildCreatePayload(event, environment);
   const created = await fetchPaperclipJson<PaperclipIssueResponse>(
@@ -382,7 +442,7 @@ async function createPaperclipIssue(
     {
       method: "POST",
       body: JSON.stringify(body),
-    }
+    },
   );
 
   const internalIssueId = created.id?.trim();
@@ -396,7 +456,7 @@ async function createPaperclipIssue(
 async function updatePaperclipIssue(
   internalIssueId: string,
   event: JiraWebhookNormalizedEvent,
-  environment: JiraSyncEnvironment
+  environment: JiraSyncEnvironment,
 ): Promise<void> {
   const body = buildUpdatePayload(event, environment);
   if (Object.keys(body).length === 0) {
@@ -409,17 +469,20 @@ async function updatePaperclipIssue(
     {
       method: "PATCH",
       body: JSON.stringify(body),
-    }
+    },
   );
 }
 
 export async function processJiraWebhookEvent(
-  input: ProcessJiraWebhookEventInput
+  input: ProcessJiraWebhookEventInput,
 ): Promise<ProcessJiraWebhookEventResult> {
   const repository = input.repository || (await JiraStorageRepository.create());
   const environment = input.environment || resolveEnvironment();
   const payloadHash = computePayloadHash(input.rawBody);
-  const externalKey = makeJiraExternalKey(environment.cloudId, input.event.issue.id);
+  const externalKey = makeJiraExternalKey(
+    environment.cloudId,
+    input.event.issue.id,
+  );
   const idempotencyKey = resolveIdempotencyKey(input.event, payloadHash);
 
   const claimed = await repository.claimIdempotencyKey({
@@ -443,7 +506,9 @@ export async function processJiraWebhookEvent(
       outcome: "ignored",
       reason: "duplicate",
       idempotencyKey,
-      internalIssueId: repository.findIssueLinkByExternalKey(externalKey)?.internalIssueId || null,
+      internalIssueId:
+        repository.findIssueLinkByExternalKey(externalKey)?.internalIssueId ||
+        null,
       externalKey,
     };
   }
