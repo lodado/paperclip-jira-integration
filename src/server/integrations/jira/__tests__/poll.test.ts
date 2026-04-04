@@ -62,6 +62,7 @@ function makePollEnvironment(): JiraSyncEnvironment {
       "20001": "paperclip-project-1",
     },
     newIssueAssigneeAgentId: null,
+    newIssueAssigneeAgentUrlKey: null,
   };
 }
 

@@ -47,6 +47,7 @@ function makeEnvironment(
       "20001": "paperclip-project-1",
     },
     newIssueAssigneeAgentId: null,
+    newIssueAssigneeAgentUrlKey: null,
     ...overrides,
   };
 }
@@ -208,6 +209,55 @@ describe("processJiraWebhookEvent", () => {
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(String(init?.body)) as Record<string, string>;
     expect(body.assigneeAgentId).toBe(ctoId);
+  });
+
+  it("resolves assigneeAgentId via newIssueAssigneeAgentUrlKey when id is unset", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+
+    const controllerId = "9aa4c86c-8cdd-4631-85dd-4b4e9416275b";
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://paperclip.example/api/companies/company-1/agents") {
+        return new Response(
+          JSON.stringify([
+            {
+              id: controllerId,
+              urlKey: "jira-controller",
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url === "https://paperclip.example/api/companies/company-1/issues") {
+        return new Response(JSON.stringify({ id: "MAY-101" }), { status: 200 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processJiraWebhookEvent({
+      event: makeEvent({ externalEventId: "evt-assignee-url-key" }),
+      rawBody: JSON.stringify({ id: "payload-assignee-url-key" }),
+      repository,
+      environment: makeEnvironment({
+        newIssueAssigneeAgentId: null,
+        newIssueAssigneeAgentUrlKey: "jira-controller",
+      }),
+    });
+
+    const createCall = fetchMock.mock.calls.find(
+      ([url]) =>
+        String(url) === "https://paperclip.example/api/companies/company-1/issues",
+    );
+    expect(createCall).toBeDefined();
+    const createBody = JSON.parse(String(createCall?.[1]?.body)) as Record<
+      string,
+      string
+    >;
+    expect(createBody.assigneeAgentId).toBe(controllerId);
   });
 
   it("ignores duplicate idempotency keys", async () => {

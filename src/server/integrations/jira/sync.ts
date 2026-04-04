@@ -25,6 +25,11 @@ export type JiraSyncEnvironment = {
   projectMapping: JiraProjectMapping;
   /** When set, included on **new** Paperclip issues only (`POST .../issues`), not on updates. */
   newIssueAssigneeAgentId: string | null;
+  /**
+   * Fallback assignee lookup key for **new** issues when `newIssueAssigneeAgentId` is not set.
+   * If this key is configured, sync resolves `/api/companies/{companyId}/agents` and requires a match.
+   */
+  newIssueAssigneeAgentUrlKey: string | null;
 };
 
 export type ProcessJiraWebhookEventInput = {
@@ -57,7 +62,14 @@ type PaperclipIssueResponse = {
   id?: string;
 };
 
+type PaperclipAgentResponse = {
+  id?: string;
+  urlKey?: string;
+};
+
 const JIRA_PROJECT_MAPPING_ENV = "JIRA_PROJECT_MAPPING_JSON";
+const DEFAULT_NEW_ISSUE_ASSIGNEE_URL_KEY = "jira-controller";
+const assigneeLookupCache = new Map<string, string>();
 
 function toNormalizedLookupKey(
   value: string | null | undefined,
@@ -134,6 +146,13 @@ function resolveEnvironment(): JiraSyncEnvironment {
     process.env.JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID?.trim() ||
     process.env.PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID?.trim() ||
     null;
+  const configuredAssigneeUrlKey =
+    process.env.JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY ??
+    process.env.PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY;
+  const newIssueAssigneeAgentUrlKey =
+    configuredAssigneeUrlKey === undefined
+      ? DEFAULT_NEW_ISSUE_ASSIGNEE_URL_KEY
+      : configuredAssigneeUrlKey.trim() || null;
 
   return {
     apiUrl: apiUrl.trim().replace(/\/+$/, ""),
@@ -143,6 +162,7 @@ function resolveEnvironment(): JiraSyncEnvironment {
     defaultProjectId: process.env.JIRA_DEFAULT_PROJECT_ID?.trim() || null,
     projectMapping: parseProjectMapping(process.env[JIRA_PROJECT_MAPPING_ENV]),
     newIssueAssigneeAgentId,
+    newIssueAssigneeAgentUrlKey,
   };
 }
 
@@ -349,6 +369,7 @@ async function fetchPaperclipJson<T>(
 function buildCreatePayload(
   event: JiraWebhookNormalizedEvent,
   environment: JiraSyncEnvironment,
+  resolvedAssigneeAgentId: string | null,
 ): CreateIssuePayload {
   const payload: CreateIssuePayload = {
     title: event.issue.summary || event.issue.key,
@@ -376,11 +397,51 @@ function buildCreatePayload(
     payload.projectId = mappedProjectId;
   }
 
-  if (environment.newIssueAssigneeAgentId) {
-    payload.assigneeAgentId = environment.newIssueAssigneeAgentId;
+  if (resolvedAssigneeAgentId) {
+    payload.assigneeAgentId = resolvedAssigneeAgentId;
   }
 
   return payload;
+}
+
+async function resolveNewIssueAssigneeAgentId(
+  environment: JiraSyncEnvironment,
+): Promise<string | null> {
+  if (environment.newIssueAssigneeAgentId) {
+    return environment.newIssueAssigneeAgentId;
+  }
+
+  const normalizedUrlKey = toNormalizedLookupKey(
+    environment.newIssueAssigneeAgentUrlKey,
+  );
+  if (!normalizedUrlKey) {
+    return null;
+  }
+
+  const cacheKey = `${environment.companyId}:${normalizedUrlKey}`;
+  const cached = assigneeLookupCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const agents = await fetchPaperclipJson<PaperclipAgentResponse[]>(
+    environment,
+    `/api/companies/${environment.companyId}/agents`,
+    { method: "GET" },
+  );
+  const matchedAgent = agents.find(
+    (agent) => toNormalizedLookupKey(agent.urlKey) === normalizedUrlKey,
+  );
+  const resolvedId = matchedAgent?.id?.trim();
+
+  if (!resolvedId) {
+    throw new Error(
+      `Configured assignee agent urlKey "${environment.newIssueAssigneeAgentUrlKey}" not found in company ${environment.companyId}`,
+    );
+  }
+
+  assigneeLookupCache.set(cacheKey, resolvedId);
+  return resolvedId;
 }
 
 function buildUpdatePayload(
@@ -435,7 +496,8 @@ async function createPaperclipIssue(
   event: JiraWebhookNormalizedEvent,
   environment: JiraSyncEnvironment,
 ): Promise<string> {
-  const body = buildCreatePayload(event, environment);
+  const assigneeAgentId = await resolveNewIssueAssigneeAgentId(environment);
+  const body = buildCreatePayload(event, environment, assigneeAgentId);
   const created = await fetchPaperclipJson<PaperclipIssueResponse>(
     environment,
     `/api/companies/${environment.companyId}/issues`,
