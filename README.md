@@ -162,3 +162,5 @@ await processJiraWebhookEvent({
 `package.json`의 `private: true`를 따릅니다.
 
 문제 나면 폴링 JSON의 `results`와 Paperclip/Jira 에러 본문을 같이 보면 됩니다.
+
+** 권한받기 귀찮아서 그냥 풀링으로 구현했습니다..; 
