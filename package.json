@@ -9,7 +9,8 @@
     "start": "next start",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "tunnel": "ngrok http 3000"
   },
   "dependencies": {
     "next": "15.4.10",
