@@ -41,11 +41,11 @@ export type RecordJiraEventLogInput = {
 const DEFAULT_STORAGE_DIR = path.resolve(
   process.cwd(),
   ".paperclip",
-  "integrations"
+  "integrations",
 );
 const DEFAULT_STORAGE_FILE = path.resolve(
   DEFAULT_STORAGE_DIR,
-  "jira-storage.json"
+  "jira-storage.json",
 );
 
 function cloneSnapshot(snapshot: JiraStorageSnapshot): JiraStorageSnapshot {
@@ -72,7 +72,7 @@ export function makeJiraExternalKey(cloudId: string, issueId: string): string {
 
   if (!normalizedCloudId || !normalizedIssueId) {
     throw new Error(
-      "cloudId and issueId are required to build jira externalKey"
+      "cloudId and issueId are required to build jira externalKey",
     );
   }
 
@@ -93,7 +93,7 @@ export class JiraStorageRepository {
   }
 
   static async create(
-    options: JiraStorageRepositoryOptions = {}
+    options: JiraStorageRepositoryOptions = {},
   ): Promise<JiraStorageRepository> {
     const storeFilePath =
       options.storeFilePath ||
@@ -117,7 +117,7 @@ export class JiraStorageRepository {
   }
 
   findIssueLinkByExternalKey(
-    externalKey: string
+    externalKey: string,
   ): JiraExternalIssueLink | null {
     return this.snapshot.externalIssueLinks[externalKey] || null;
   }
@@ -128,18 +128,18 @@ export class JiraStorageRepository {
   }): JiraExternalIssueLink | null {
     const externalKey = makeJiraExternalKey(
       params.cloudId,
-      params.externalIssueId
+      params.externalIssueId,
     );
     return this.findIssueLinkByExternalKey(externalKey);
   }
 
   async upsertIssueLink(
-    input: UpsertJiraIssueLinkInput
+    input: UpsertJiraIssueLinkInput,
   ): Promise<JiraExternalIssueLink> {
     return this.withWriteLock(async () => {
       const externalKey = makeJiraExternalKey(
         input.cloudId,
-        input.externalIssueId
+        input.externalIssueId,
       );
       const now = new Date().toISOString();
       const existing = this.snapshot.externalIssueLinks[externalKey];
@@ -209,25 +209,41 @@ export class JiraStorageRepository {
       };
 
       this.snapshot.idempotency[key] = next;
+
+      if (params.status === "processed" || params.status === "failed") {
+        const ext = next.externalKey;
+        for (const [otherKey, rec] of Object.entries(
+          this.snapshot.idempotency,
+        )) {
+          if (rec.externalKey === ext && otherKey !== key) {
+            delete this.snapshot.idempotency[otherKey];
+          }
+        }
+      }
+
       await this.persist();
       return next;
     });
   }
 
   async recordEventLog(
-    input: RecordJiraEventLogInput
+    input: RecordJiraEventLogInput,
   ): Promise<JiraIntegrationEventLog> {
     return this.withWriteLock(async () => {
       const externalEventId = toNullableString(input.externalEventId);
       const processedAt = new Date().toISOString();
-      const logKey =
-        externalEventId ||
-        `${input.externalKey}:${input.eventType}:${processedAt}`;
+      const ticketKey = input.externalKey.trim();
+
+      for (const [k, log] of Object.entries(this.snapshot.eventLogs)) {
+        if (log.externalKey === ticketKey) {
+          delete this.snapshot.eventLogs[k];
+        }
+      }
 
       const next: JiraIntegrationEventLog = {
-        logKey,
+        logKey: ticketKey,
         externalEventId,
-        externalKey: input.externalKey,
+        externalKey: ticketKey,
         eventType: input.eventType,
         status: input.status,
         error: toNullableString(input.error),
@@ -235,7 +251,7 @@ export class JiraStorageRepository {
         processedAt,
       };
 
-      this.snapshot.eventLogs[logKey] = next;
+      this.snapshot.eventLogs[ticketKey] = next;
       await this.persist();
       return next;
     });
@@ -245,7 +261,7 @@ export class JiraStorageRepository {
     const previous = this.writeQueue;
     let release: () => void = () => undefined;
 
-    this.writeQueue = new Promise<void>(resolve => {
+    this.writeQueue = new Promise<void>((resolve) => {
       release = resolve;
     });
 
@@ -263,12 +279,12 @@ export class JiraStorageRepository {
     await fs.writeFile(
       this.storeFilePath,
       `${JSON.stringify(this.snapshot, null, 2)}\n`,
-      "utf8"
+      "utf8",
     );
   }
 
   private static async readRawSnapshot(
-    storeFilePath: string
+    storeFilePath: string,
   ): Promise<unknown> {
     try {
       const raw = await fs.readFile(storeFilePath, "utf8");

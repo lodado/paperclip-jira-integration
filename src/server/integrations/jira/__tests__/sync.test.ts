@@ -117,7 +117,7 @@ describe("processJiraWebhookEvent", () => {
     expect(
       snapshot.externalIssueLinks["jira:cloud-1:10001"]?.internalIssueId,
     ).toBe("MAY-100");
-    expect(snapshot.eventLogs["evt-1"]?.status).toBe("processed");
+    expect(snapshot.eventLogs["jira:cloud-1:10001"]?.status).toBe("processed");
   });
 
   it("updates existing linked issue for updated events", async () => {
@@ -245,7 +245,7 @@ describe("processJiraWebhookEvent", () => {
     expect(fetchMock).not.toHaveBeenCalled();
 
     const snapshot = repository.getSnapshot();
-    expect(snapshot.eventLogs["evt-1"]?.status).toBe("ignored");
+    expect(snapshot.eventLogs["jira:cloud-1:10001"]?.status).toBe("processed");
   });
 
   it("marks idempotency/event logs as failed on API errors", async () => {
@@ -277,6 +277,6 @@ describe("processJiraWebhookEvent", () => {
 
     expect(idempotencyEntries).toHaveLength(1);
     expect(idempotencyEntries[0]?.status).toBe("failed");
-    expect(snapshot.eventLogs["evt-1"]?.status).toBe("failed");
+    expect(snapshot.eventLogs["jira:cloud-1:10001"]?.status).toBe("failed");
   });
 });

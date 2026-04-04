@@ -493,15 +493,6 @@ export async function processJiraWebhookEvent(
   });
 
   if (!claimed) {
-    await repository.recordEventLog({
-      externalEventId: input.event.externalEventId,
-      externalKey,
-      eventType: input.event.eventType,
-      status: "ignored",
-      payloadHash,
-      error: "duplicate idempotency key",
-    });
-
     return {
       outcome: "ignored",
       reason: "duplicate",
