@@ -1,155 +1,122 @@
 # paperclip-jira-integration
 
-Jira Cloud 이슈를 **REST 폴링**으로 읽어 **Paperclip** API로 이슈를 만들거나 갱신하는 Next.js(App Router) 서비스입니다. Jira↔Paperclip ID 매핑·멱등·로그는 로컬 JSON(또는 `JIRA_STORAGE_FILE`)에 둡니다.
+이 프로젝트는 **Jira Cloud**에 있는 이슈를 주기적으로 읽어 와서, **Paperclip** 쪽에 **같은 일을 하는 이슈**를 만들거나 내용을 맞춰 주는 **Next.js** 서비스입니다. Jira가 “기획·백로그·보드”에 있는 그대로 두고, **에이전트가 돌아가야 하는 작업**은 Paperclip에서 이어가게 하려는 그림에 맞춰져 있어요.
 
-## Paperclip이란?
+**어떻게 Jira를 읽나요?** Jira **웹훅은 쓰지 않고**, REST API로 **폴링**(일정 주기로 조회)만 합니다. 그래서 Jira 쪽에 웹훅을 깔 필요는 없습니다.
 
-[Paperclip](https://paperclip.ing)은 **회사 단위로 이슈(작업)와 AI 에이전트를 묶어 돌리는 운영 플랫폼**입니다. 이슈에 담당 에이전트를 붙이고, 에이전트는 하트비트(짧은 실행 주기)마다 인박스를 보고 **체크아웃 → 실행 → 코멘트·상태 갱신** 같은 흐름으로 일합니다. REST API로 이슈·에이전트·프로젝트·회사를 다루며, 사람은 보드/UI로 같은 데이터를 봅니다.
-
-이 레포는 그 Paperclip 바깥에서 **Jira에만 있는 티켓을 Paperclip 이슈로 넣고, Jira 변경을 Paperclip 쪽 설명·상태 등에 반영**하는 **연동 전용 서비스**입니다. Jira를 없애지 않고, “실행·에이전트 작업” 층을 Paperclip에 두는 구조에 맞춥니다.
-
-## Jira → Paperclip → 작업 플로우
-
-1. **Jira**  
-   기획·백로그·보드에서 이슈를 만들고 수정합니다. (여전히 Jira가 업무 티켓의 원천이 될 수 있습니다.)
-
-2. **이 서비스(폴링)**  
-   일정 주기(또는 수동 호출)로 Jira에서 최근에 바뀐 이슈를 읽고, 로컬 매핑을 보며 Paperclip에 **없으면 생성·있으면 PATCH** 합니다. Jira 설명·요약·상태 등이 Paperclip 이슈 본문·필드로 옮겨집니다.
-
-3. **Paperclip**  
-   동기화된 이슈가 생기면, 설정한 에이전트(예: `jira-controller` 등) 인박스에 잡히거나 사람이 배정할 수 있습니다. 에이전트는 Paperclip 규칙대로 **체크아웃 후 작업**하고, 코멘트·`done` 등으로 마무리합니다.
-
-4. **Jira로 되돌리기**  
-   이 레포는 Paperclip → Jira 자동 반영을 하지 않습니다. Jira 상태를 맞추려면 별도 프로세스(수동·다른 자동화)가 필요합니다.
+**상태는 어디에 저장하나요?** Jira 이슈와 Paperclip 이슈가 **서로 같은 건지** 알아야 하고, 같은 변경을 **여러 번 처리하지 않도록** 기록이 필요합니다. 그걸 **JSON 파일 하나**에 둡니다. 기본 경로는 **`.paperclip/integrations/jira-storage.json`** 이고, 바꾸고 싶으면 환경 변수 **`JIRA_STORAGE_FILE`** 로 경로를 지정하면 됩니다. (클라우드에 올릴 때는 **쓰기 가능한 경로**를 꼭 잡아 주세요.)
 
 ---
 
-## 빠른 시작
+### Paperclip이 뭔가요?
+
+**[Paperclip](https://paperclip.ing)** 은 회사나 팀 단위로 **이슈(할 일)** 와 **AI 에이전트**를 묶어서 운영하는 플랫폼이에요. 이슈에 에이전트를 붙이면, 에이전트는 인박스를 보면서 **체크아웃 → 실행 → 코멘트·상태 정리** 같은 흐름으로 움직입니다. 사람은 UI로 같은 데이터를 볼 수 있고, API로도 다룰 수 있습니다.
+
+### 이 레포는 정확히 뭐 하는 건가요?
+
+- **Jira → Paperclip** 방향만 다룹니다. Jira에서 바뀐 내용을 읽어서 Paperclip 이슈를 **없으면 만들고, 있으면 갱신**합니다.
+- **Paperclip → Jira** 로 상태나 코멘트를 **자동으로 되돌려 주지는 않**습니다. Jira 쪽을 맞추려면 사람이 하거나, 다른 자동화를 쓰면 됩니다.
+
+즉, Jira를 없애는 게 아니라 **“티켓의 출처는 Jira, 실행·에이전트 작업은 Paperclip”** 처럼 역할을 나누는 **일방향 연동 브리지**라고 보면 됩니다.
+
+---
+
+## 실행
 
 ```bash
 pnpm install
-cp .env.example .env.local   # 환경 변수 채우기
+cp .env.example .env.local   # 아래 필수 변수 채우기
 pnpm dev
 ```
 
-- 개발 서버: `http://localhost:3000`
+- 앱: `http://localhost:3000`
 - 폴링: **`GET` 또는 `POST /integrations/jira/poll`**
-  - 프로덕션·`pnpm start`: `Authorization: Bearer` + `CRON_SECRET` 또는 `JIRA_POLL_SECRET`
-  - `pnpm dev`: Bearer 생략 가능
-  - 쿼리(선택): `jql` / `extraJql`, `lookback` / `lookbackMinutes`
+- **배포·`pnpm start`:** `Authorization: Bearer` 토큰 필요. 값은 **`CRON_SECRET`**(있으면 이걸 사용) 또는 **`JIRA_POLL_SECRET`**
+- **`pnpm dev`:** Bearer 없이 호출 가능
+- URL 쿼리(덮어쓰기용, 생략 가능): `jql`, `extraJql`, `lookback`, `lookbackMinutes`
 
 ```bash
-pnpm test
-pnpm type-check
-pnpm build && pnpm start
+pnpm test && pnpm type-check && pnpm build && pnpm start
 ```
 
 ---
 
 ## 동작 요약
 
-1. Cron(예: [Vercel `vercel.json`](vercel.json) — 5분마다) 또는 수동으로 `/integrations/jira/poll` 호출
-2. Jira `POST .../rest/api/3/search/jql`로 최근 `updated` 윈도 안 이슈 조회 (`JIRA_POLL_LOOKBACK_MINUTES`, `JIRA_POLL_JQL`)
-3. 이슈마다 `processJiraWebhookEvent` → Paperclip `POST`/`PATCH`, 로컬 저장소에 멱등·링크 기록
-4. 멱등 키는 `poll:{cloudId}:{issueId}:{fields.updated}` 기반; **티켓당** 멱등·이벤트 로그는 최신만 유지하도록 정리됨
+- [Vercel Cron](vercel.json)으로 약 **5분마다** 위 URL 호출하거나, 직접 `curl`/스케줄러 사용.
+- Jira **`POST /rest/api/3/search/jql`**. 최근 구간은 기본 **10분**(`JIRA_POLL_LOOKBACK_MINUTES`로 변경). 추가 조건은 `JIRA_POLL_JQL` 또는 요청 쿼리 `jql`.
+- 이슈마다 Paperclip `POST`/`PATCH` 후 로컬 JSON에 기록. 티켓당 멱등·이벤트 로그는 최신 위주로 정리.
 
 ---
 
-## Jira 설정
-
-- [Atlassian API 토큰](https://id.atlassian.com/manage-profile/security/api-tokens) + `JIRA_ATLASSIAN_EMAIL` / `JIRA_ATLASSIAN_API_TOKEN`
-- `JIRA_CLOUD_ID`
-- 웹훅 불필요
-
-> **P.S.** 웹훅을 안 쓴 건 기술적으로 불가능해서가 아니라, Jira에서 웹훅 쓰려면 권한·설정 받는 게 **귀찮아서** 그냥 폴링으로 탔습니다;;
-
-### 폴링 예시
+## curl
 
 ```bash
 curl -sS -H "Authorization: Bearer $JIRA_POLL_SECRET" \
-  https://your-deployment.example.com/integrations/jira/poll
+  https://<배포도메인>/integrations/jira/poll
 ```
+
+로컬(`pnpm dev`)은 Bearer 없이:
 
 ```bash
-curl -sS -G --data-urlencode 'jql=AND project = KAN' --data-urlencode 'lookback=60' \
-  http://localhost:3000/integrations/jira/poll
+curl -sS http://localhost:3000/integrations/jira/poll
 ```
 
-Vercel 배포 시 대시보드에 **`CRON_SECRET`**을 넣으면 Cron 요청에 Bearer가 붙습니다. 로컬에는 Cron이 없으므로 직접 호출하거나 외부 스케줄러를 쓰면 됩니다.
+Vercel Cron에는 **`CRON_SECRET`**을 넣으면 요청 Bearer와 맞출 수 있습니다.
 
 ---
 
 ## 환경 변수
 
-### 폴링
+표에는 **권장 이름(`JIRA_*`)만** 적습니다. `PAPERCLIP_*`, `ATLASSIAN_EMAIL` 등 **짧은 이름**도 코드에서 읽습니다. 둘 다 있으면 **`JIRA_*`가 우선**입니다. 전체 목록은 **`.env.example`** 주석을 보면 됩니다.
 
-| 변수                         | 대체              | 설명                                             |
-| ---------------------------- | ----------------- | ------------------------------------------------ |
-| `CRON_SECRET`                | —                 | Bearer 검증(있으면 `JIRA_POLL_SECRET`보다 우선)  |
-| `JIRA_POLL_SECRET`           | —                 | 수동/외부 Cron용 Bearer                          |
-| `JIRA_ATLASSIAN_EMAIL`       | `ATLASSIAN_EMAIL` | Jira Basic 인증 이메일                           |
-| `JIRA_ATLASSIAN_API_TOKEN`   | `JIRA_API_TOKEN`  | API 토큰                                         |
-| `JIRA_POLL_LOOKBACK_MINUTES` | —                 | `updated >= -Nm`의 N (기본 10, 1–1440)           |
-| `JIRA_POLL_JQL`              | —                 | 시간 조건 뒤에 붙는 JQL (`AND project = X` 권장) |
+### 필수
 
-### Paperclip (필수)
+| 변수                                  | 용도                                                       |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `JIRA_ATLASSIAN_EMAIL`                | Jira Basic 이메일                                          |
+| `JIRA_ATLASSIAN_API_TOKEN`            | Jira API 토큰                                              |
+| `JIRA_CLOUD_ID`                       | Atlassian cloud ID                                         |
+| `JIRA_PAPERCLIP_API_URL`              | Paperclip API 베이스 URL                                   |
+| `JIRA_PAPERCLIP_API_KEY`              | Paperclip API 키(Bearer)                                   |
+| `JIRA_PAPERCLIP_COMPANY_ID`           | Paperclip 회사 ID                                          |
+| `CRON_SECRET` 또는 `JIRA_POLL_SECRET` | 배포/프로덕션 폴링 Bearer(둘 다 있으면 `CRON_SECRET` 사용) |
 
-| 변수                        | 대체                   | 설명                    |
-| --------------------------- | ---------------------- | ----------------------- |
-| `JIRA_PAPERCLIP_API_URL`    | `PAPERCLIP_API_URL`    | API 베이스 URL          |
-| `JIRA_PAPERCLIP_API_KEY`    | `PAPERCLIP_API_KEY`    | `Authorization: Bearer` |
-| `JIRA_PAPERCLIP_COMPANY_ID` | `PAPERCLIP_COMPANY_ID` | 회사 ID                 |
+### 선택
 
-### Paperclip (선택)
+안 넣어도 됩니다. **기본값으로 돌아가고**, 필요할 때만 채우면 됩니다.
 
-| 변수                                              | 대체                                         | 설명                                                                                                     |
-| ------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `JIRA_DEFAULT_PROJECT_ID`                         | —                                            | 매핑 없을 때 Paperclip `projectId`                                                                       |
-| `JIRA_PROJECT_MAPPING_JSON`                       | —                                            | Jira 프로젝트 id/key → Paperclip `projectId` JSON                                                        |
-| `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`      | `PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`      | 신규 이슈에만 `assigneeAgentId` 고정                                                                     |
-| `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY` | `PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY` | ID 없을 때 `GET .../agents`로 `urlKey` 매칭(미설정 시 기본 `jira-controller`; 빈 문자열이면 조회 비활성) |
-
-### Jira Cloud (필수)
-
-| 변수            | 설명                                      |
-| --------------- | ----------------------------------------- |
-| `JIRA_CLOUD_ID` | 외부 키 `jira:{cloudId}:{issueId}`에 사용 |
-
-### 로컬 저장소 (선택)
-
-| 변수                | 설명                                                              |
-| ------------------- | ----------------------------------------------------------------- |
-| `JIRA_STORAGE_FILE` | 상태 JSON 경로(기본: `.paperclip/integrations/jira-storage.json`) |
-
-서버리스에서는 쓰기 가능한 경로를 지정해야 합니다.
+| 변수                                              | 이렇게 쓰면 됩니다                                                                                                                                                                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `JIRA_POLL_LOOKBACK_MINUTES`                      | Jira에서 “최근 몇 분 안에 수정된 이슈만” 가져올지 정합니다. 검색 JQL에 `updated >= -Nm`이 들어가는 **N(분)**이에요. 비우거나 이상한 숫자면 **10분**으로 처리됩니다. 허용 범위는 **1~1440**입니다.                                                |
+| `JIRA_POLL_JQL`                                   | 위 시간 조건 **뒤에** 이어 붙는 JQL입니다. 예: `AND project = KAN`처럼 **특정 프로젝트만** 보고 싶을 때 씁니다. 비우면 **전체 프로젝트** 중에서, 방금 설정한 lookback 안에서만 바뀐 이슈를 가져옵니다.                                           |
+| `JIRA_DEFAULT_PROJECT_ID`                         | Paperclip에 새 이슈를 넣을 때 `projectId`를 어떻게 정할지 모호할 때 쓰는 **기본값**입니다. Jira 프로젝트별로 다르게 쓰려면 아래 매핑을 쓰는 편이 좋습니다.                                                                                       |
+| `JIRA_PROJECT_MAPPING_JSON`                       | **Jira 프로젝트(id 또는 key)** → **Paperclip `projectId`** 를 JSON으로 적습니다. 팀마다 Jira 프로젝트가 여러 개일 때, Paperclip 쪽 프로젝트를 맞춰 두려면 여기서 매핑하면 됩니다.                                                                |
+| `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`      | Jira에서 **처음** Paperclip으로 넘어온 이슈에만, 지정한 에이전트를 **담당으로 붙일 때** 씁니다. 이미 있는 이슈 갱신에는 영향 없습니다.                                                                                                           |
+| `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY` | 위 ID를 모를 때, Paperclip API로 에이전트 목록을 받아와 **`urlKey`가 같은 에이전트**를 찾습니다. **안 적으면** 기본으로 `jira-controller`를 찾습니다. **빈 문자열 `""`로 두면** 이 검색 자체를 하지 않습니다(에이전트 자동 배정이 필요 없을 때). |
+| `JIRA_STORAGE_FILE`                               | Jira↔Paperclip 연동 상태(매핑·멱등 등)를 저장하는 **JSON 파일 경로**입니다. Vercel 같은 서버리스에서는 기본 경로가 쓰기 불가할 수 있어서, **쓰기 가능한 경로**를 꼭 지정해 주세요.                                                               |
 
 ---
 
-## 폴링 HTTP 응답
+## 폴링 응답
 
-| 상태 | 의미                                  |
+| 코드 | 의미                                  |
 | ---- | ------------------------------------- |
 | 200  | `{ ok: true, scanned, results }`      |
 | 400  | `lookback` / `lookbackMinutes` 잘못됨 |
-| 401  | Bearer 없음·불일치(개발 모드 제외)    |
-| 500  | 설정 누락, Jira/Paperclip API 오류 등 |
+| 401  | Bearer 없음·불일치(`pnpm dev` 제외)   |
+| 500  | 설정 누락, Jira/Paperclip 오류 등     |
 
 ---
 
-## 이 레포가 Paperclip에 보내는 것
+## Paperclip으로 보내는 것
 
-- **생성 `POST /api/companies/{companyId}/issues`:** `title`, `description`, 선택 `status`, `priority`, `projectId`, 신규 시 `assigneeAgentId`(환경·urlKey 조회 결과)
-- **갱신 `PATCH /api/issues/{id}`:** 폴링은 changelog가 비어 있어 제목·설명·상태 등이 함께 갱신될 수 있음
+- **생성** `POST /api/companies/{companyId}/issues`: `title`, `description`, 필요 시 `status`, `priority`, `projectId`, 신규면 `assigneeAgentId`
+- **갱신** `PATCH /api/issues/{id}`: 제목·본문·상태 등이 함께 갱신될 수 있음
 
-`description`은 `sync.ts`에서 조합합니다.
+`description`: Jira 메타·본문 평문(ADF는 `description-text.ts`에서 추출). **신규에만** `## Plan (draft, from Jira)` 블록 추가. 갱신 시에는 플랜 블록 없음.
 
-- 공통: `Synced from Jira issue {KEY}.`, Source/ID/EventType, 있으면 `Jira description:` + **평문**(Jira ADF는 `description-text.ts`에서 추출)
-- **신규 생성에만** 추가: `---` 아래 `## Plan (draft, from Jira)`(Objective, 선택 Context)
-- **갱신 시**에는 위 «공통» 블록만 PATCH(플랜 초안 블록은 보내지 않음)
-
-상태·우선순위 문자열은 `mapStatus` / `mapPriority`로 Paperclip enum에 맞춥니다.
-
-신규 이슈 담당 에이전트: (1) `..._ASSIGNEE_AGENT_ID` (2) 없으면 `..._ASSIGNEE_AGENT_URL_KEY`로 agents 목록 조회 (3) 기본 urlKey `jira-controller`. 매칭 실패 시 생성은 에러로 중단됩니다.
+신규 담당 에이전트: 환경의 ID → 없으면 `urlKey` 조회 → 기본 `jira-controller`. 매칭 실패 시 생성 실패.
 
 ---
 
@@ -194,4 +161,4 @@ await processJiraWebhookEvent({
 
 `package.json`의 `private: true`를 따릅니다.
 
-디버깅 시 폴링 JSON의 `results`, JQL·lookback, Paperclip API 응답 본문을 함께 보면 좋습니다.
+문제 나면 폴링 JSON의 `results`와 Paperclip/Jira 에러 본문을 같이 보면 됩니다.
