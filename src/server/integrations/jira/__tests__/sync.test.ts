@@ -8,7 +8,9 @@ import { JiraStorageRepository } from "../storage";
 import type { JiraWebhookNormalizedEvent } from "../webhook";
 import { processJiraWebhookEvent, type JiraSyncEnvironment } from "../sync";
 
-function makeEvent(overrides?: Partial<JiraWebhookNormalizedEvent>): JiraWebhookNormalizedEvent {
+function makeEvent(
+  overrides?: Partial<JiraWebhookNormalizedEvent>,
+): JiraWebhookNormalizedEvent {
   return {
     provider: "jira",
     eventType: "issue.created",
@@ -31,7 +33,9 @@ function makeEvent(overrides?: Partial<JiraWebhookNormalizedEvent>): JiraWebhook
   };
 }
 
-function makeEnvironment(): JiraSyncEnvironment {
+function makeEnvironment(
+  overrides?: Partial<JiraSyncEnvironment>,
+): JiraSyncEnvironment {
   return {
     apiUrl: "https://paperclip.example",
     apiKey: "test-key",
@@ -42,6 +46,8 @@ function makeEnvironment(): JiraSyncEnvironment {
       proj: "paperclip-project-1",
       "20001": "paperclip-project-1",
     },
+    newIssueAssigneeAgentId: null,
+    ...overrides,
   };
 }
 
@@ -62,7 +68,9 @@ describe("processJiraWebhookEvent", () => {
 
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(new Response(JSON.stringify({ id: "MAY-100" }), { status: 200 }));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ id: "MAY-100" }), { status: 200 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await processJiraWebhookEvent({
@@ -78,12 +86,14 @@ describe("processJiraWebhookEvent", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://paperclip.example/api/companies/company-1/issues");
+    expect(url).toBe(
+      "https://paperclip.example/api/companies/company-1/issues",
+    );
     expect(init?.method).toBe("POST");
     expect(init?.headers).toEqual(
       expect.objectContaining({
         Authorization: "Bearer test-key",
-      })
+      }),
     );
 
     const body = JSON.parse(String(init?.body)) as Record<string, string>;
@@ -93,13 +103,19 @@ describe("processJiraWebhookEvent", () => {
         status: "todo",
         priority: "high",
         projectId: "paperclip-project-1",
-      })
+      }),
     );
+    expect(body.description).toContain("## Plan (draft, from Jira)");
+    expect(body.description).toContain("### Objective");
+    expect(body.description).toContain("Build Jira sync");
+    expect(body.description).toContain("### Context (Jira description)");
+    expect(body.description).toContain("details");
+    expect(body).not.toHaveProperty("assigneeAgentId");
 
     const snapshot = repository.getSnapshot();
-    expect(snapshot.externalIssueLinks["jira:cloud-1:10001"]?.internalIssueId).toBe(
-      "MAY-100"
-    );
+    expect(
+      snapshot.externalIssueLinks["jira:cloud-1:10001"]?.internalIssueId,
+    ).toBe("MAY-100");
     expect(snapshot.eventLogs["evt-1"]?.status).toBe("processed");
   });
 
@@ -135,7 +151,9 @@ describe("processJiraWebhookEvent", () => {
 
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(new Response(JSON.stringify({ id: "MAY-200" }), { status: 200 }));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ id: "MAY-200" }), { status: 200 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await processJiraWebhookEvent({
@@ -149,7 +167,9 @@ describe("processJiraWebhookEvent", () => {
     expect(result.reason).toBe("updated");
     expect(result.internalIssueId).toBe("MAY-200");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe("https://paperclip.example/api/issues/MAY-200");
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://paperclip.example/api/issues/MAY-200",
+    );
 
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as Record<
       string,
@@ -158,8 +178,35 @@ describe("processJiraWebhookEvent", () => {
     expect(body).toEqual(
       expect.objectContaining({
         status: "done",
-      })
+      }),
     );
+    expect(body).not.toHaveProperty("assigneeAgentId");
+  });
+
+  it("sets assigneeAgentId on create when newIssueAssigneeAgentId is configured", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ id: "MAY-101" }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctoId = "82a0892c-c077-44f6-a54f-f7af59960a70";
+    await processJiraWebhookEvent({
+      event: makeEvent({ externalEventId: "evt-assignee" }),
+      rawBody: JSON.stringify({ id: "payload-assignee" }),
+      repository,
+      environment: makeEnvironment({ newIssueAssigneeAgentId: ctoId }),
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init?.body)) as Record<string, string>;
+    expect(body.assigneeAgentId).toBe(ctoId);
   });
 
   it("ignores duplicate idempotency keys", async () => {
@@ -170,7 +217,9 @@ describe("processJiraWebhookEvent", () => {
 
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(new Response(JSON.stringify({ id: "MAY-300" }), { status: 200 }));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ id: "MAY-300" }), { status: 200 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const event = makeEvent();
@@ -206,7 +255,9 @@ describe("processJiraWebhookEvent", () => {
 
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ error: "boom" }), { status: 500 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
@@ -215,8 +266,10 @@ describe("processJiraWebhookEvent", () => {
         rawBody: JSON.stringify({ id: "payload-4" }),
         repository,
         environment: makeEnvironment(),
-      })
-    ).rejects.toThrow("Paperclip API POST /api/companies/company-1/issues failed");
+      }),
+    ).rejects.toThrow(
+      "Paperclip API POST /api/companies/company-1/issues failed",
+    );
 
     const snapshot = repository.getSnapshot();
     const idempotencyEntries = Object.values(snapshot.idempotency);
