@@ -4,14 +4,14 @@
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev --turbopack -p 9997",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 9997",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "tunnel": "ngrok http 3000"
+    "tunnel": "ngrok http 9997"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",

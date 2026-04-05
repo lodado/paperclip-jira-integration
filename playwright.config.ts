@@ -1,6 +1,6 @@
 import { defineConfig } from "@playwright/test";
 
-const port = 3000;
+const port = 9997;
 
 export default defineConfig({
   testDir: "tests/e2e",
@@ -9,7 +9,7 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${port}`,
   },
   webServer: {
-    command: `pnpm build && pnpm start --port ${port}`,
+    command: `pnpm build && pnpm start`,
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: true,
     env: {
