@@ -4,7 +4,7 @@
 
 **어떻게 Jira를 읽나요?** Jira **웹훅은 쓰지 않고**, REST API로 **폴링**(일정 주기로 조회)만 합니다. 그래서 Jira 쪽에 웹훅을 깔 필요는 없습니다.
 
-**상태는 어디에 저장하나요?** Jira 이슈와 Paperclip 이슈가 **서로 같은 건지** 알아야 하고, 같은 변경을 **여러 번 처리하지 않도록** 기록이 필요합니다. 그걸 **JSON 파일 하나**에 둡니다. 기본 경로는 **`.paperclip/integrations/jira-storage.json`** 이고, 바꾸고 싶으면 환경 변수 **`JIRA_STORAGE_FILE`** 로 경로를 지정하면 됩니다. (클라우드에 올릴 때는 **쓰기 가능한 경로**를 꼭 잡아 주세요.)
+**상태는 어디에 저장하나요?** Jira 이슈와 Paperclip 이슈가 **서로 같은 건지** 알아야 하고, 같은 변경을 **여러 번 처리하지 않도록** 기록이 필요합니다. 그걸 **SQLite 파일 하나**에 둡니다. 기본 경로는 **`.paperclip/integrations/jira-storage.sqlite`** 이고, 바꾸고 싶으면 환경 변수 **`JIRA_STORAGE_FILE`** 로 경로를 지정하면 됩니다. (클라우드에 올릴 때는 **쓰기 가능한 경로**를 꼭 잡아 주세요.)
 
 ---
 
@@ -33,7 +33,7 @@ pnpm dev
 - 폴링: **`GET` 또는 `POST /integrations/jira/poll`**
 - **배포·`pnpm start`:** `Authorization: Bearer` 토큰 필요. 값은 **`CRON_SECRET`**(있으면 이걸 사용) 또는 **`JIRA_POLL_SECRET`**
 - **`pnpm dev`:** Bearer 없이 호출 가능
-- URL 쿼리(덮어쓰기용, 생략 가능): `jql`, `extraJql`, `lookback`, `lookbackMinutes`
+- URL 쿼리(덮어쓰기용, 생략 가능): `jql`, `extraJql` (`JIRA_POLL_JQL` 대신 한 번만 바꿀 때)
 
 ```bash
 pnpm test && pnpm type-check && pnpm build && pnpm start
@@ -44,8 +44,8 @@ pnpm test && pnpm type-check && pnpm build && pnpm start
 ## 동작 요약
 
 - [Vercel Cron](vercel.json)으로 약 **5분마다** 위 URL 호출하거나, 직접 `curl`/스케줄러 사용.
-- Jira **`POST /rest/api/3/search/jql`**. 최근 구간은 기본 **10분**(`JIRA_POLL_LOOKBACK_MINUTES`로 변경). 추가 조건은 `JIRA_POLL_JQL` 또는 요청 쿼리 `jql`.
-- 이슈마다 Paperclip `POST`/`PATCH` 후 로컬 JSON에 기록. 티켓당 멱등·이벤트 로그는 최신 위주로 정리.
+- Jira **`POST /rest/api/3/search/jql`**. 최근 수정 구간은 코드에서 **10분**으로 고정(`updated >= -10m`, Cron 주기와 겹침용). 추가 조건은 `JIRA_POLL_JQL` 또는 요청 쿼리 `jql`.
+- 이슈마다 Paperclip `POST`/`PATCH` 후 로컬 SQLite에 기록. 티켓당 멱등·이벤트 로그는 최신 위주로 정리.
 
 ---
 
@@ -88,24 +88,22 @@ Vercel Cron에는 **`CRON_SECRET`**을 넣으면 요청 Bearer와 맞출 수 있
 
 | 변수                                              | 이렇게 쓰면 됩니다                                                                                                                                                                                                                               |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `JIRA_POLL_LOOKBACK_MINUTES`                      | Jira에서 “최근 몇 분 안에 수정된 이슈만” 가져올지 정합니다. 검색 JQL에 `updated >= -Nm`이 들어가는 **N(분)**이에요. 비우거나 이상한 숫자면 **10분**으로 처리됩니다. 허용 범위는 **1~1440**입니다.                                                |
-| `JIRA_POLL_JQL`                                   | 위 시간 조건 **뒤에** 이어 붙는 JQL입니다. 예: `AND project = KAN`처럼 **특정 프로젝트만** 보고 싶을 때 씁니다. 비우면 **전체 프로젝트** 중에서, 방금 설정한 lookback 안에서만 바뀐 이슈를 가져옵니다.                                           |
+| `JIRA_POLL_JQL`                                   | 검색 JQL에서 **`updated >= -10m` 뒤에** 이어 붙는 조각입니다. 예: `AND project = KAN`처럼 특정 프로젝트만 볼 때. 비우면 **전체 프로젝트** 중 최근 **10분** 안에 수정된 이슈만 가져옵니다.                                                        |
 | `JIRA_DEFAULT_PROJECT_ID`                         | Paperclip에 새 이슈를 넣을 때 `projectId`를 어떻게 정할지 모호할 때 쓰는 **기본값**입니다. Jira 프로젝트별로 다르게 쓰려면 아래 매핑을 쓰는 편이 좋습니다.                                                                                       |
 | `JIRA_PROJECT_MAPPING_JSON`                       | **Jira 프로젝트(id 또는 key)** → **Paperclip `projectId`** 를 JSON으로 적습니다. 팀마다 Jira 프로젝트가 여러 개일 때, Paperclip 쪽 프로젝트를 맞춰 두려면 여기서 매핑하면 됩니다.                                                                |
 | `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`      | Jira에서 **처음** Paperclip으로 넘어온 이슈에만, 지정한 에이전트를 **담당으로 붙일 때** 씁니다. 이미 있는 이슈 갱신에는 영향 없습니다.                                                                                                           |
 | `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY` | 위 ID를 모를 때, Paperclip API로 에이전트 목록을 받아와 **`urlKey`가 같은 에이전트**를 찾습니다. **안 적으면** 기본으로 `jira-controller`를 찾습니다. **빈 문자열 `""`로 두면** 이 검색 자체를 하지 않습니다(에이전트 자동 배정이 필요 없을 때). |
-| `JIRA_STORAGE_FILE`                               | Jira↔Paperclip 연동 상태(매핑·멱등 등)를 저장하는 **JSON 파일 경로**입니다. Vercel 같은 서버리스에서는 기본 경로가 쓰기 불가할 수 있어서, **쓰기 가능한 경로**를 꼭 지정해 주세요.                                                               |
+| `JIRA_STORAGE_FILE`                               | Jira↔Paperclip 연동 상태(매핑·멱등 등)를 저장하는 **SQLite 파일 경로**입니다. Vercel 같은 서버리스에서는 기본 경로가 쓰기 불가할 수 있어서, **쓰기 가능한 경로**를 꼭 지정해 주세요.                                                               |
 
 ---
 
 ## 폴링 응답
 
-| 코드 | 의미                                  |
-| ---- | ------------------------------------- |
-| 200  | `{ ok: true, scanned, results }`      |
-| 400  | `lookback` / `lookbackMinutes` 잘못됨 |
-| 401  | Bearer 없음·불일치(`pnpm dev` 제외)   |
-| 500  | 설정 누락, Jira/Paperclip 오류 등     |
+| 코드 | 의미                                |
+| ---- | ----------------------------------- |
+| 200  | `{ ok: true, scanned, results }`    |
+| 401  | Bearer 없음·불일치(`pnpm dev` 제외) |
+| 500  | 설정 누락, Jira/Paperclip 오류 등   |
 
 ---
 
@@ -131,7 +129,7 @@ import {
 import { normalizeJiraWebhookEvent } from "@/server/integrations/jira/webhook";
 
 const repository = await JiraStorageRepository.create({
-  storeFilePath: "/tmp/jira-store.json",
+  storeFilePath: "/tmp/jira-store.sqlite",
   cloudId: process.env.JIRA_CLOUD_ID,
 });
 
@@ -162,5 +160,3 @@ await processJiraWebhookEvent({
 `package.json`의 `private: true`를 따릅니다.
 
 문제 나면 폴링 JSON의 `results`와 Paperclip/Jira 에러 본문을 같이 보면 됩니다.
-
-** 권한받기 귀찮아서 그냥 풀링으로 구현했습니다..; 
