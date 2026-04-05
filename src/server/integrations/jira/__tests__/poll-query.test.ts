@@ -58,4 +58,34 @@ describe("parseJiraPollQueryParams", () => {
     );
     expect(r).toEqual({ ok: true, extraJql: "AND a=1" });
   });
+
+  it("parses jqlOnly with full jql", () => {
+    const r = parseJiraPollQueryParams(
+      new URLSearchParams("jqlOnly=1&jql=statusCategory+%3D+%22To+Do%22"),
+    );
+    expect(r).toEqual({
+      ok: true,
+      extraJql: 'statusCategory = "To Do"',
+      jqlOnly: true,
+    });
+  });
+
+  it("accepts fullJql alias for jqlOnly flag", () => {
+    const r = parseJiraPollQueryParams(
+      new URLSearchParams("fullJql=true&jql=project+%3D+KAN"),
+    );
+    expect(r).toEqual({
+      ok: true,
+      extraJql: "project = KAN",
+      jqlOnly: true,
+    });
+  });
+
+  it("rejects jqlOnly without jql", () => {
+    const r = parseJiraPollQueryParams(new URLSearchParams("jqlOnly=1"));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toContain("jqlOnly");
+    }
+  });
 });

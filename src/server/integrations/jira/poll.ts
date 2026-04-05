@@ -43,6 +43,8 @@ export type RunJiraPollOptions = {
   auth?: JiraAtlassianAuth;
   lookbackMinutes?: number;
   extraJql?: string;
+  /** When true, `extraJql` is the full JQL (query param only; no `updated` prefix). */
+  jqlOnly?: boolean;
 };
 
 export type JiraPollItemResult =
@@ -116,6 +118,24 @@ function buildSearchJql(
   }
 
   return `${timeClause} ${trimmedExtra}`;
+}
+
+function resolvePollJql(options: RunJiraPollOptions): string {
+  const extraFromQuery = options.extraJql?.trim();
+  const extraFromEnv = process.env.JIRA_POLL_JQL?.trim();
+
+  if (options.jqlOnly) {
+    if (!extraFromQuery) {
+      throw new Error(
+        "jqlOnly poll requires extraJql from the request (full JQL, no updated prefix)",
+      );
+    }
+    return extraFromQuery;
+  }
+
+  const lookbackMinutes = options.lookbackMinutes ?? parseLookbackMinutes();
+  const extraJql = extraFromQuery || extraFromEnv || undefined;
+  return buildSearchJql(lookbackMinutes, extraJql);
 }
 
 export function jiraSearchIssueToNormalizedEvent(
@@ -244,11 +264,8 @@ export async function runJiraPoll(
 ): Promise<RunJiraPollResult> {
   const auth = options.auth || resolveJiraAtlassianAuth();
   const fetchImpl = options.fetchImpl || fetch;
-  const lookbackMinutes = options.lookbackMinutes ?? parseLookbackMinutes();
-  const extraJql =
-    options.extraJql?.trim() || process.env.JIRA_POLL_JQL?.trim() || undefined;
 
-  const jql = buildSearchJql(lookbackMinutes, extraJql);
+  const jql = resolvePollJql(options);
   const issues = await fetchAllIssuesMatchingJql(auth, jql, fetchImpl);
 
   const repository =

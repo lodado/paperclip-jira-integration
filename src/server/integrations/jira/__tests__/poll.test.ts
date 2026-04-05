@@ -156,6 +156,67 @@ describe("runJiraPoll", () => {
     ).toBe("PC-POLL-1");
   });
 
+  it("jqlOnly uses request jql as full search without updated prefix", async () => {
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "jira-poll-jqlonly-"),
+    );
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+
+    const jiraIssue = {
+      id: "10002",
+      key: "PROJ-2",
+      self: "https://example/rest/api/3/issue/10002",
+      fields: {
+        summary: "Todo only",
+        updated: "2024-06-02T12:00:00.000+0000",
+        priority: { name: "Low" },
+        status: { name: "To Do" },
+        issuetype: { name: "Task" },
+        project: { id: "20001", key: "PROJ" },
+      },
+    };
+
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("api.atlassian.com")) {
+        return new Response(
+          JSON.stringify({
+            issues: [jiraIssue],
+            isLast: true,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("paperclip.example")) {
+        return new Response(JSON.stringify({ id: "PC-JQL-ONLY" }), {
+          status: 200,
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runJiraPoll({
+      fetchImpl: fetchMock,
+      auth: { email: "u@e.com", apiToken: "t", cloudId: "cloud-1" },
+      repository,
+      environment: makePollEnvironment(),
+      extraJql: 'statusCategory = "To Do"',
+      jqlOnly: true,
+    });
+
+    const jiraCall = fetchMock.mock.calls.find(([u]) =>
+      String(u).includes("api.atlassian.com"),
+    );
+    expect(jiraCall).toBeDefined();
+    const body = JSON.parse(String(jiraCall![1]?.body)) as { jql?: string };
+    expect(body.jql).toBe('statusCategory = "To Do"');
+    expect(body.jql).not.toContain("updated");
+  });
+
   it("second poll with same Jira updated timestamp is ignored as duplicate", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-poll-dup-"));
     const repository = await JiraStorageRepository.create({

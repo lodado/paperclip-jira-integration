@@ -38,6 +38,7 @@ async function handlePoll(request: Request) {
         lookbackMinutes: parsed.lookbackMinutes,
       }),
       ...(parsed.extraJql !== undefined && { extraJql: parsed.extraJql }),
+      ...(parsed.jqlOnly && { jqlOnly: true }),
     });
     return NextResponse.json({ ok: true, ...result }, { status: 200 });
   } catch (error) {
