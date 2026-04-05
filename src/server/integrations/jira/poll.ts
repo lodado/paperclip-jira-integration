@@ -41,9 +41,11 @@ export type RunJiraPollOptions = {
   environment?: JiraSyncEnvironment;
   fetchImpl?: typeof fetch;
   auth?: JiraAtlassianAuth;
-  lookbackMinutes?: number;
   extraJql?: string;
 };
+
+/** JQL `updated >= -Nm`; fixed overlap vs ~5m cron (not configurable). */
+const POLL_LOOKBACK_MINUTES = 10;
 
 export type JiraPollItemResult =
   | { issueKey: string; ok: true; outcome: string; reason: string }
@@ -89,20 +91,6 @@ export function resolveJiraAtlassianAuth(): JiraAtlassianAuth {
 function basicAuthorizationHeader(auth: JiraAtlassianAuth): string {
   const raw = `${auth.email}:${auth.apiToken}`;
   return `Basic ${Buffer.from(raw, "utf8").toString("base64")}`;
-}
-
-function parseLookbackMinutes(): number {
-  const raw = process.env.JIRA_POLL_LOOKBACK_MINUTES?.trim();
-  if (!raw) {
-    return 10;
-  }
-
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 1 || n > 1440) {
-    return 10;
-  }
-
-  return n;
 }
 
 function buildSearchJql(
@@ -244,11 +232,10 @@ export async function runJiraPoll(
 ): Promise<RunJiraPollResult> {
   const auth = options.auth || resolveJiraAtlassianAuth();
   const fetchImpl = options.fetchImpl || fetch;
-  const lookbackMinutes = options.lookbackMinutes ?? parseLookbackMinutes();
   const extraJql =
     options.extraJql?.trim() || process.env.JIRA_POLL_JQL?.trim() || undefined;
 
-  const jql = buildSearchJql(lookbackMinutes, extraJql);
+  const jql = buildSearchJql(POLL_LOOKBACK_MINUTES, extraJql);
   const issues = await fetchAllIssuesMatchingJql(auth, jql, fetchImpl);
 
   const repository =

@@ -29,14 +29,7 @@ async function handlePoll(request: Request) {
 
   try {
     const parsed = parseJiraPollQueryParams(new URL(request.url).searchParams);
-    if (!parsed.ok) {
-      return NextResponse.json({ error: parsed.error }, { status: 400 });
-    }
-
     const result = await runJiraPoll({
-      ...(parsed.lookbackMinutes !== undefined && {
-        lookbackMinutes: parsed.lookbackMinutes,
-      }),
       ...(parsed.extraJql !== undefined && { extraJql: parsed.extraJql }),
     });
     return NextResponse.json({ ok: true, ...result }, { status: 200 });
