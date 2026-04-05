@@ -21,6 +21,7 @@ export type JiraSyncEnvironment = {
   apiKey: string;
   companyId: string;
   cloudId: string;
+  integrationParentIssueId: string | null;
   defaultProjectId: string | null;
   projectMapping: JiraProjectMapping;
   /** When set, included on **new** Paperclip issues only (`POST .../issues`), not on updates. */
@@ -53,6 +54,7 @@ type CreateIssuePayload = {
   status?: PaperclipIssueStatus;
   priority?: PaperclipIssuePriority;
   projectId?: string;
+  parentId?: string;
   assigneeAgentId?: string;
 };
 
@@ -62,13 +64,25 @@ type PaperclipIssueResponse = {
   id?: string;
 };
 
+type PaperclipIssueListItem = {
+  id?: string;
+  description?: string;
+};
+
+type PaperclipIssueListResponse =
+  | PaperclipIssueListItem[]
+  | {
+      items?: PaperclipIssueListItem[];
+      data?: PaperclipIssueListItem[];
+      results?: PaperclipIssueListItem[];
+    };
+
 type PaperclipAgentResponse = {
   id?: string;
   urlKey?: string;
 };
 
 const JIRA_PROJECT_MAPPING_ENV = "JIRA_PROJECT_MAPPING_JSON";
-const DEFAULT_NEW_ISSUE_ASSIGNEE_URL_KEY = "jira-controller";
 const assigneeLookupCache = new Map<string, string>();
 
 function toNormalizedLookupKey(
@@ -151,7 +165,7 @@ function resolveEnvironment(): JiraSyncEnvironment {
     process.env.PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY;
   const newIssueAssigneeAgentUrlKey =
     configuredAssigneeUrlKey === undefined
-      ? DEFAULT_NEW_ISSUE_ASSIGNEE_URL_KEY
+      ? null
       : configuredAssigneeUrlKey.trim() || null;
 
   return {
@@ -159,6 +173,10 @@ function resolveEnvironment(): JiraSyncEnvironment {
     apiKey: apiKey.trim(),
     companyId: companyId.trim(),
     cloudId: cloudId.trim(),
+    integrationParentIssueId:
+      process.env.JIRA_PAPERCLIP_PARENT_ISSUE_ID?.trim() ||
+      process.env.PAPERCLIP_PARENT_ISSUE_ID?.trim() ||
+      null,
     defaultProjectId: process.env.JIRA_DEFAULT_PROJECT_ID?.trim() || null,
     projectMapping: parseProjectMapping(process.env[JIRA_PROJECT_MAPPING_ENV]),
     newIssueAssigneeAgentId,
@@ -397,11 +415,77 @@ function buildCreatePayload(
     payload.projectId = mappedProjectId;
   }
 
+  if (environment.integrationParentIssueId) {
+    payload.parentId = environment.integrationParentIssueId;
+  }
+
   if (resolvedAssigneeAgentId) {
     payload.assigneeAgentId = resolvedAssigneeAgentId;
   }
 
   return payload;
+}
+
+function extractJiraIssueIdFromDescription(description: string): string | null {
+  const lines = description.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^\s*-\s*Jira Issue ID:\s*(.+?)\s*$/i);
+    if (match?.[1]) {
+      return match[1].trim();
+    }
+  }
+  return null;
+}
+
+function toIssueListItems(
+  payload: PaperclipIssueListResponse,
+): PaperclipIssueListItem[] {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload.items)) {
+    return payload.items;
+  }
+  if (Array.isArray(payload.data)) {
+    return payload.data;
+  }
+  if (Array.isArray(payload.results)) {
+    return payload.results;
+  }
+  return [];
+}
+
+async function findExistingPaperclipIssueIdForJiraIssue(
+  event: JiraWebhookNormalizedEvent,
+  environment: JiraSyncEnvironment,
+): Promise<string | null> {
+  try {
+    const response = await fetchPaperclipJson<PaperclipIssueListResponse>(
+      environment,
+      `/api/companies/${environment.companyId}/issues`,
+      { method: "GET" },
+    );
+
+    const issues = toIssueListItems(response);
+    for (const issue of issues) {
+      const issueId = issue.id?.trim();
+      const description = issue.description;
+      if (!issueId || typeof description !== "string") {
+        continue;
+      }
+
+      const jiraIssueId = extractJiraIssueIdFromDescription(description);
+      if (jiraIssueId && jiraIssueId === event.issue.id) {
+        return issueId;
+      }
+    }
+
+    return null;
+  } catch {
+    // Best-effort dedupe fallback: if this lookup fails, continue with normal create/update flow.
+    return null;
+  }
 }
 
 async function resolveNewIssueAssigneeAgentId(
@@ -568,15 +652,18 @@ export async function processJiraWebhookEvent(
 
   try {
     const existingLink = repository.findIssueLinkByExternalKey(externalKey);
+    const dedupedIssueId =
+      existingLink?.internalIssueId ||
+      (await findExistingPaperclipIssueIdForJiraIssue(input.event, environment));
 
     let internalIssueId: string;
     let reason: ProcessJiraWebhookEventResult["reason"];
 
-    if (input.event.eventType === "issue.created" && !existingLink) {
+    if (input.event.eventType === "issue.created" && !dedupedIssueId) {
       internalIssueId = await createPaperclipIssue(input.event, environment);
       reason = "created";
-    } else if (existingLink) {
-      internalIssueId = existingLink.internalIssueId;
+    } else if (dedupedIssueId) {
+      internalIssueId = dedupedIssueId;
       await updatePaperclipIssue(internalIssueId, input.event, environment);
       reason = "updated";
     } else {

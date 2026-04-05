@@ -105,8 +105,9 @@ Vercel Cron에는 **`CRON_SECRET`**을 넣으면 요청 Bearer와 맞출 수 있
 | `JIRA_POLL_JQL`                                   | 검색 JQL에서 **`updated >= -10m` 뒤에** 이어 붙는 조각입니다. 예: `AND project = KAN`처럼 특정 프로젝트만 볼 때. 비우면 **전체 프로젝트** 중 최근 **10분** 안에 수정된 이슈만 가져옵니다.                                                        |
 | `JIRA_DEFAULT_PROJECT_ID`                         | Paperclip에 새 이슈를 넣을 때 `projectId`를 어떻게 정할지 모호할 때 쓰는 **기본값**입니다. Jira 프로젝트별로 다르게 쓰려면 아래 매핑을 쓰는 편이 좋습니다.                                                                                       |
 | `JIRA_PROJECT_MAPPING_JSON`                       | **Jira 프로젝트(id 또는 key)** → **Paperclip `projectId`** 를 JSON으로 적습니다. 팀마다 Jira 프로젝트가 여러 개일 때, Paperclip 쪽 프로젝트를 맞춰 두려면 여기서 매핑하면 됩니다.                                                                |
+| `JIRA_PAPERCLIP_PARENT_ISSUE_ID`                 | 신규 sync 이슈를 항상 특정 parent 이슈의 **child task**로 만들고 싶을 때 사용합니다(`parentId`로 전달). 라우팅 강제가 필요할 때 설정하세요.                                                                                                         |
 | `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`      | Jira에서 **처음** Paperclip으로 넘어온 이슈에만, 지정한 에이전트를 **담당으로 붙일 때** 씁니다. 이미 있는 이슈 갱신에는 영향 없습니다.                                                                                                           |
-| `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY` | 위 ID를 모를 때, Paperclip API로 에이전트 목록을 받아와 **`urlKey`가 같은 에이전트**를 찾습니다. **안 적으면** 기본으로 `jira-controller`를 찾습니다. **빈 문자열 `""`로 두면** 이 검색 자체를 하지 않습니다(에이전트 자동 배정이 필요 없을 때). |
+| `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY` | 위 ID를 모를 때, Paperclip API로 에이전트 목록을 받아와 **`urlKey`가 같은 에이전트**를 찾습니다. 기본 자동값은 없습니다. 설정한 경우에만 URL-key lookup을 수행합니다. **빈 문자열 `""`로 두면** 이 검색 자체를 하지 않습니다(에이전트 자동 배정이 필요 없을 때). |
 | `JIRA_STORAGE_FILE`                               | Jira↔Paperclip 연동 상태(매핑·멱등 등)를 저장하는 **SQLite 파일 경로**입니다. Vercel 같은 서버리스에서는 기본 경로가 쓰기 불가할 수 있어서, **쓰기 가능한 경로**를 꼭 지정해 주세요.                                                               |
 | `JIRA_PLANNER_SECRET`                            | `POST /integrations/jira/tasks` 인증 Bearer입니다. 없으면 `CRON_SECRET` → `JIRA_POLL_SECRET` 순서로 fallback 합니다.                                                                                                                         |
 | `JIRA_PLANNER_DEFAULT_PROJECT_KEY`               | planner payload에 `projectKey`가 없을 때 Jira 이슈를 생성할 기본 프로젝트 key입니다.                                                                                                                                                           |
@@ -127,12 +128,13 @@ Vercel Cron에는 **`CRON_SECRET`**을 넣으면 요청 Bearer와 맞출 수 있
 
 ## Paperclip으로 보내는 것
 
-- **생성** `POST /api/companies/{companyId}/issues`: `title`, `description`, 필요 시 `status`, `priority`, `projectId`, 신규면 `assigneeAgentId`
+- **생성** `POST /api/companies/{companyId}/issues`: `title`, `description`, 필요 시 `status`, `priority`, `projectId`, `parentId`, 신규면 `assigneeAgentId`
 - **갱신** `PATCH /api/issues/{id}`: 제목·본문·상태 등이 함께 갱신될 수 있음
 
 `description`: Jira 메타·본문 평문(ADF는 `description-text.ts`에서 추출). **신규에만** `## Plan (draft, from Jira)` 블록 추가. 갱신 시에는 플랜 블록 없음.
 
-신규 담당 에이전트: 환경의 ID → 없으면 `urlKey` 조회 → 기본 `jira-controller`. 매칭 실패 시 생성 실패.
+신규 담당 에이전트: 환경의 ID → 없으면(그리고 URL key가 설정된 경우에만) `urlKey` 조회. 매칭 실패 시 생성 실패.
+추가 중복 방지: 로컬 링크 저장소가 비어 있어도, Paperclip 이슈 목록의 `Jira Issue ID` 메타라인과 매칭되면 신규 생성 대신 기존 이슈 갱신으로 처리.
 
 ---
 
@@ -156,10 +158,11 @@ const environment: JiraSyncEnvironment = {
   apiKey: "secret",
   companyId: "company-id",
   cloudId: "atlassian-cloud-id",
+  integrationParentIssueId: null,
   defaultProjectId: null,
   projectMapping: {},
   newIssueAssigneeAgentId: null,
-  newIssueAssigneeAgentUrlKey: "jira-controller",
+  newIssueAssigneeAgentUrlKey: null,
 };
 
 const event = normalizeJiraWebhookEvent(JSON.parse(rawBody), new Headers());

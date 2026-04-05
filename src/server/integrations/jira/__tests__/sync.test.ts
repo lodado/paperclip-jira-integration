@@ -41,6 +41,7 @@ function makeEnvironment(
     apiKey: "test-key",
     companyId: "company-1",
     cloudId: "cloud-1",
+    integrationParentIssueId: null,
     defaultProjectId: null,
     projectMapping: {
       proj: "paperclip-project-1",
@@ -67,11 +68,16 @@ describe("processJiraWebhookEvent", () => {
       storeFilePath: path.join(tmpDir, "storage.json"),
     });
 
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ id: "MAY-100" }), { status: 200 }),
-      );
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (
+        url === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "GET"
+      ) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: "MAY-100" }), { status: 200 });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await processJiraWebhookEvent({
@@ -84,9 +90,15 @@ describe("processJiraWebhookEvent", () => {
     expect(result.outcome).toBe("processed");
     expect(result.reason).toBe("created");
     expect(result.internalIssueId).toBe("MAY-100");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    const [url, init] = fetchMock.mock.calls[0];
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const [url, init] = createCall!;
     expect(url).toBe(
       "https://paperclip.example/api/companies/company-1/issues",
     );
@@ -191,11 +203,16 @@ describe("processJiraWebhookEvent", () => {
       storeFilePath: path.join(tmpDir, "storage.json"),
     });
 
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ id: "MAY-101" }), { status: 200 }),
-      );
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (
+        url === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "GET"
+      ) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: "MAY-101" }), { status: 200 });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const ctoId = "82a0892c-c077-44f6-a54f-f7af59960a70";
@@ -206,7 +223,13 @@ describe("processJiraWebhookEvent", () => {
       environment: makeEnvironment({ newIssueAssigneeAgentId: ctoId }),
     });
 
-    const [, init] = fetchMock.mock.calls[0];
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const [, init] = createCall!;
     const body = JSON.parse(String(init?.body)) as Record<string, string>;
     expect(body.assigneeAgentId).toBe(ctoId);
   });
@@ -249,8 +272,9 @@ describe("processJiraWebhookEvent", () => {
     });
 
     const createCall = fetchMock.mock.calls.find(
-      ([url]) =>
-        String(url) === "https://paperclip.example/api/companies/company-1/issues",
+      ([url, init]) =>
+        String(url) === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "POST",
     );
     expect(createCall).toBeDefined();
     const createBody = JSON.parse(String(createCall?.[1]?.body)) as Record<
@@ -266,11 +290,16 @@ describe("processJiraWebhookEvent", () => {
       storeFilePath: path.join(tmpDir, "storage.json"),
     });
 
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ id: "MAY-300" }), { status: 200 }),
-      );
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (
+        url === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "GET"
+      ) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: "MAY-300" }), { status: 200 });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const event = makeEvent();
@@ -298,17 +327,122 @@ describe("processJiraWebhookEvent", () => {
     expect(snapshot.eventLogs["jira:cloud-1:10001"]?.status).toBe("processed");
   });
 
+  it("sets parentId on create when integrationParentIssueId is configured", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (
+        url === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "GET"
+      ) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: "MAY-102" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processJiraWebhookEvent({
+      event: makeEvent({ externalEventId: "evt-parent-id" }),
+      rawBody: JSON.stringify({ id: "payload-parent-id" }),
+      repository,
+      environment: makeEnvironment({
+        integrationParentIssueId: "85d756e6-3b38-4aa3-91f1-898d5355f537",
+      }),
+    });
+
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const [, init] = createCall!;
+    const body = JSON.parse(String(init?.body)) as Record<string, string>;
+    expect(body.parentId).toBe("85d756e6-3b38-4aa3-91f1-898d5355f537");
+  });
+
+  it("reuses existing Paperclip issue when storage link is missing", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+
+      if (
+        url === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "GET"
+      ) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "MAY-400",
+              description: [
+                "Synced from Jira issue PROJ-1.",
+                "",
+                "- Jira Issue ID: 10001",
+              ].join("\n"),
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+
+      if (url === "https://paperclip.example/api/issues/MAY-400") {
+        return new Response(JSON.stringify({ id: "MAY-400" }), { status: 200 });
+      }
+
+      if (url === "https://paperclip.example/api/companies/company-1/issues") {
+        return new Response("should not create", { status: 500 });
+      }
+
+      return new Response("unexpected", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await processJiraWebhookEvent({
+      event: makeEvent({
+        eventType: "issue.updated",
+        externalEventId: "evt-dedupe-fallback",
+      }),
+      rawBody: JSON.stringify({ id: "payload-dedupe-fallback" }),
+      repository,
+      environment: makeEnvironment(),
+    });
+
+    expect(result.outcome).toBe("processed");
+    expect(result.reason).toBe("updated");
+    expect(result.internalIssueId).toBe("MAY-400");
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === "https://paperclip.example/api/companies/company-1/issues" &&
+          (init?.method || "GET") === "POST",
+      ).length,
+    ).toBe(0);
+  });
+
   it("marks idempotency/event logs as failed on API errors", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
     const repository = await JiraStorageRepository.create({
       storeFilePath: path.join(tmpDir, "storage.json"),
     });
 
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ error: "boom" }), { status: 500 }),
-      );
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (
+        url === "https://paperclip.example/api/companies/company-1/issues" &&
+        (init?.method || "GET") === "GET"
+      ) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "boom" }), { status: 500 });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(

@@ -56,6 +56,7 @@ function makePollEnvironment(): JiraSyncEnvironment {
     apiKey: "test-key",
     companyId: "company-1",
     cloudId: "cloud-1",
+    integrationParentIssueId: null,
     defaultProjectId: null,
     projectMapping: {
       proj: "paperclip-project-1",
@@ -205,8 +206,10 @@ describe("runJiraPoll", () => {
       lookbackMinutes: 10,
     });
 
-    const paperclipCallsAfterFirst = fetchMock.mock.calls.filter(([u]) =>
-      String(u).includes("paperclip.example"),
+    const paperclipMutationCallsAfterFirst = fetchMock.mock.calls.filter(
+      ([u, init]) =>
+        String(u).includes("paperclip.example") &&
+        (init?.method || "GET") !== "GET",
     ).length;
 
     await runJiraPoll({
@@ -217,12 +220,14 @@ describe("runJiraPoll", () => {
       lookbackMinutes: 10,
     });
 
-    const paperclipCallsAfterSecond = fetchMock.mock.calls.filter(([u]) =>
-      String(u).includes("paperclip.example"),
+    const paperclipMutationCallsAfterSecond = fetchMock.mock.calls.filter(
+      ([u, init]) =>
+        String(u).includes("paperclip.example") &&
+        (init?.method || "GET") !== "GET",
     ).length;
 
-    expect(paperclipCallsAfterFirst).toBe(1);
-    expect(paperclipCallsAfterSecond).toBe(1);
+    expect(paperclipMutationCallsAfterFirst).toBe(1);
+    expect(paperclipMutationCallsAfterSecond).toBe(1);
   });
 
   it("paginates Jira /search/jql with nextPageToken until isLast", async () => {
