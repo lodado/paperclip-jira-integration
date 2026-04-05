@@ -138,7 +138,8 @@ describe("JiraStorageRepository", () => {
 
   it("migrates legacy storage shape on startup", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-storage-"));
-    const storeFilePath = path.join(tmpDir, "store.json");
+    const storeFilePath = path.join(tmpDir, "store.sqlite");
+    const legacyStoreFilePath = path.join(tmpDir, "store.json");
 
     const legacyPayload = {
       external_issue_links: [
@@ -161,7 +162,11 @@ describe("JiraStorageRepository", () => {
       ],
     };
 
-    await fs.writeFile(storeFilePath, JSON.stringify(legacyPayload), "utf8");
+    await fs.writeFile(
+      legacyStoreFilePath,
+      JSON.stringify(legacyPayload),
+      "utf8",
+    );
 
     const repository = await JiraStorageRepository.create({ storeFilePath });
     const snapshot = repository.getSnapshot();
