@@ -126,7 +126,6 @@ describe("runJiraPoll", () => {
       },
       repository,
       environment: makePollEnvironment(),
-      lookbackMinutes: 10,
     });
 
     expect(result.scanned).toBe(1);
@@ -202,7 +201,6 @@ describe("runJiraPoll", () => {
       auth: { email: "u@e.com", apiToken: "t", cloudId: "cloud-1" },
       repository,
       environment: makePollEnvironment(),
-      lookbackMinutes: 10,
     });
 
     const paperclipCallsAfterFirst = fetchMock.mock.calls.filter(([u]) =>
@@ -214,7 +212,6 @@ describe("runJiraPoll", () => {
       auth: { email: "u@e.com", apiToken: "t", cloudId: "cloud-1" },
       repository,
       environment: makePollEnvironment(),
-      lookbackMinutes: 10,
     });
 
     const paperclipCallsAfterSecond = fetchMock.mock.calls.filter(([u]) =>
@@ -291,7 +288,6 @@ describe("runJiraPoll", () => {
       auth: { email: "u@e.com", apiToken: "t", cloudId: "cloud-1" },
       repository,
       environment: makePollEnvironment(),
-      lookbackMinutes: 10,
     });
 
     expect(jiraCalls).toBe(2);
@@ -301,5 +297,40 @@ describe("runJiraPoll", () => {
         String(u).includes("api.atlassian.com"),
       ).length,
     ).toBe(2);
+  });
+
+  it("appends extraJql after the fixed updated lookback clause", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-poll-jql-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "store.sqlite"),
+    });
+
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("api.atlassian.com")) {
+        return new Response(JSON.stringify({ issues: [], isLast: true }), {
+          status: 200,
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runJiraPoll({
+      fetchImpl: fetchMock,
+      auth: { email: "u@e.com", apiToken: "t", cloudId: "cloud-1" },
+      repository,
+      extraJql: "AND project = KAN",
+    });
+
+    const jiraCall = fetchMock.mock.calls.find(([u]) =>
+      String(u).includes("api.atlassian.com"),
+    );
+    expect(jiraCall).toBeDefined();
+    const [, init] = jiraCall!;
+    const body = JSON.parse(init?.body as string) as { jql: string };
+    expect(body.jql).toMatch(/^updated >= -10m/);
+    expect(body.jql).toContain("AND project = KAN");
   });
 });
