@@ -19,6 +19,8 @@ export default defineConfig({
       JIRA_CLOUD_ID: "cloud-1",
       JIRA_PLANNER_DEFAULT_PROJECT_KEY: "MAY",
       JIRA_ATLASSIAN_API_BASE_URL: "http://127.0.0.1:45679",
+      CONSOLE_LOGIN_PASSWORD: "e2e-console-pass",
+      CONSOLE_SESSION_SECRET: "e2e-console-session-secret-32charsxx",
     },
   },
 });
