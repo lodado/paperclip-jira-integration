@@ -10,6 +10,7 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "tunnel": "ngrok http 3000"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "react-dom": "19.2.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.53.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.21",
     "@types/react": "^19.1.8",

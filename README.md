@@ -31,6 +31,7 @@ pnpm dev
 
 - 앱: `http://localhost:3000`
 - 폴링: **`GET` 또는 `POST /integrations/jira/poll`**
+- 플래너 이슈 생성: **`POST /integrations/jira/tasks`**
 - **배포·`pnpm start`:** `Authorization: Bearer` 토큰 필요. 값은 **`CRON_SECRET`**(있으면 이걸 사용) 또는 **`JIRA_POLL_SECRET`**
 - **`pnpm dev`:** Bearer 없이 호출 가능
 - URL 쿼리(덮어쓰기용, 생략 가능): `jql`, `extraJql` (`JIRA_POLL_JQL` 대신 한 번만 바꿀 때)
@@ -54,6 +55,19 @@ pnpm test && pnpm type-check && pnpm build && pnpm start
 ```bash
 curl -sS -H "Authorization: Bearer $JIRA_POLL_SECRET" \
   https://<배포도메인>/integrations/jira/poll
+```
+
+플래너가 Jira task를 생성할 때:
+
+```bash
+curl -sS -X POST https://<배포도메인>/integrations/jira/tasks \
+  -H "Authorization: Bearer $JIRA_PLANNER_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "summary":"로그인 API 명세 작성",
+    "requirements":"CTO spec-driven 형식으로 Jira task 생성",
+    "spec":{"acceptanceCriteria":["Jira issue가 생성된다"]}
+  }'
 ```
 
 로컬(`pnpm dev`)은 Bearer 없이:
@@ -94,6 +108,10 @@ Vercel Cron에는 **`CRON_SECRET`**을 넣으면 요청 Bearer와 맞출 수 있
 | `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`      | Jira에서 **처음** Paperclip으로 넘어온 이슈에만, 지정한 에이전트를 **담당으로 붙일 때** 씁니다. 이미 있는 이슈 갱신에는 영향 없습니다.                                                                                                           |
 | `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY` | 위 ID를 모를 때, Paperclip API로 에이전트 목록을 받아와 **`urlKey`가 같은 에이전트**를 찾습니다. **안 적으면** 기본으로 `jira-controller`를 찾습니다. **빈 문자열 `""`로 두면** 이 검색 자체를 하지 않습니다(에이전트 자동 배정이 필요 없을 때). |
 | `JIRA_STORAGE_FILE`                               | Jira↔Paperclip 연동 상태(매핑·멱등 등)를 저장하는 **SQLite 파일 경로**입니다. Vercel 같은 서버리스에서는 기본 경로가 쓰기 불가할 수 있어서, **쓰기 가능한 경로**를 꼭 지정해 주세요.                                                               |
+| `JIRA_PLANNER_SECRET`                            | `POST /integrations/jira/tasks` 인증 Bearer입니다. 없으면 `CRON_SECRET` → `JIRA_POLL_SECRET` 순서로 fallback 합니다.                                                                                                                         |
+| `JIRA_PLANNER_DEFAULT_PROJECT_KEY`               | planner payload에 `projectKey`가 없을 때 Jira 이슈를 생성할 기본 프로젝트 key입니다.                                                                                                                                                           |
+| `JIRA_PLANNER_DEFAULT_ISSUE_TYPE`                | planner payload에 `issueType`이 없을 때 Jira 이슈 타입 기본값입니다(기본 `Task`).                                                                                                                                                               |
+| `JIRA_ATLASSIAN_API_BASE_URL`                    | Atlassian API 베이스 URL override입니다(기본 `https://api.atlassian.com`). 로컬 E2E mock에서 사용합니다.                                                                                                                                      |
 
 ---
 

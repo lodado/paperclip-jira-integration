@@ -8,6 +8,12 @@ export default function Home() {
         Production needs Bearer (CRON_SECRET or JIRA_POLL_SECRET); local{" "}
         <code>next dev</code> skips auth.
       </p>
+      <p>
+        Jira planner task create: POST /integrations/jira/tasks.
+        Production needs Bearer (<code>JIRA_PLANNER_SECRET</code> fallback to{" "}
+        <code>CRON_SECRET</code>/<code>JIRA_POLL_SECRET</code>); local{" "}
+        <code>next dev</code> skips auth.
+      </p>
     </main>
   );
 }
