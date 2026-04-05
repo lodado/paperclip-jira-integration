@@ -78,6 +78,34 @@ describe("JiraStorageRepository", () => {
     expect(updated.status).toBe("processed");
   });
 
+  it("allows reclaim after failed idempotency so sync can retry", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-storage-"));
+    const storeFilePath = path.join(tmpDir, "store.json");
+    const repository = await JiraStorageRepository.create({ storeFilePath });
+    const externalKey = makeJiraExternalKey("cloud-1", "10001");
+
+    expect(
+      await repository.claimIdempotencyKey({
+        idempotencyKey: "evt-retry",
+        externalKey,
+        externalEventId: "poll:1",
+      }),
+    ).toBe(true);
+
+    await repository.markIdempotencyStatus({
+      idempotencyKey: "evt-retry",
+      status: "failed",
+    });
+
+    expect(
+      await repository.claimIdempotencyKey({
+        idempotencyKey: "evt-retry",
+        externalKey,
+        externalEventId: "poll:1",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps one idempotency row per Jira ticket after processed", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-storage-"));
     const storeFilePath = path.join(tmpDir, "store.json");

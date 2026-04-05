@@ -374,12 +374,8 @@ function buildCreatePayload(
   const payload: CreateIssuePayload = {
     title: event.issue.summary || event.issue.key,
     description: buildCreateIssueDescription(event),
+    status: "todo",
   };
-
-  const mappedStatus = mapStatus(event.issue.status);
-  if (mappedStatus) {
-    payload.status = mappedStatus;
-  }
 
   const mappedPriority = mapPriority(event.issue.priority);
   if (mappedPriority) {

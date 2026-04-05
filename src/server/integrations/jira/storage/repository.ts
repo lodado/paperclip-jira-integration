@@ -223,7 +223,13 @@ export class JiraStorageRepository {
 
       const existing = this.snapshot.idempotency[key];
       if (existing) {
-        return false;
+        if (existing.status !== "failed") {
+          return false;
+        }
+        this.database
+          .prepare("DELETE FROM idempotency WHERE idempotency_key = ?")
+          .run(key);
+        delete this.snapshot.idempotency[key];
       }
 
       const now = new Date().toISOString();
@@ -535,7 +541,9 @@ export class JiraStorageRepository {
     snapshot: JiraStorageSnapshot,
   ): void {
     const transaction = database.transaction((input: JiraStorageSnapshot) => {
-      database.exec("DELETE FROM issue_links; DELETE FROM idempotency; DELETE FROM event_logs;");
+      database.exec(
+        "DELETE FROM issue_links; DELETE FROM idempotency; DELETE FROM event_logs;",
+      );
 
       const insertIssue = database.prepare(
         `INSERT INTO issue_links (
@@ -638,7 +646,9 @@ export class JiraStorageRepository {
     return storeFilePath;
   }
 
-  private static async readRawSnapshot(storeFilePath: string): Promise<unknown> {
+  private static async readRawSnapshot(
+    storeFilePath: string,
+  ): Promise<unknown> {
     try {
       const raw = await fs.readFile(storeFilePath, "utf8");
       return JSON.parse(raw) as unknown;
