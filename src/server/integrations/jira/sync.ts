@@ -70,6 +70,7 @@ type PaperclipAgentResponse = {
 const JIRA_PROJECT_MAPPING_ENV = "JIRA_PROJECT_MAPPING_JSON";
 const DEFAULT_NEW_ISSUE_ASSIGNEE_URL_KEY = "jira-controller";
 const assigneeLookupCache = new Map<string, string>();
+const externalKeyProcessingQueue = new Map<string, Promise<void>>();
 
 function toNormalizedLookupKey(
   value: string | null | undefined,
@@ -342,6 +343,35 @@ function shouldApplyField(
   return aliases.some((alias) => changedFields.has(alias));
 }
 
+async function withExternalKeyProcessingLock<T>(
+  externalKey: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const key = externalKey.trim();
+  if (!key) {
+    return task();
+  }
+
+  const previous = externalKeyProcessingQueue.get(key) || Promise.resolve();
+  let release: () => void = () => undefined;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  externalKeyProcessingQueue.set(key, previous.then(() => current));
+
+  await previous;
+
+  try {
+    return await task();
+  } finally {
+    release();
+
+    if (externalKeyProcessingQueue.get(key) === current) {
+      externalKeyProcessingQueue.delete(key);
+    }
+  }
+}
+
 async function fetchPaperclipJson<T>(
   environment: JiraSyncEnvironment,
   path: string,
@@ -543,85 +573,87 @@ export async function processJiraWebhookEvent(
   );
   const idempotencyKey = resolveIdempotencyKey(input.event, payloadHash);
 
-  const claimed = await repository.claimIdempotencyKey({
-    idempotencyKey,
-    externalKey,
-    externalEventId: input.event.externalEventId,
-    payloadHash,
-  });
-
-  if (!claimed) {
-    return {
-      outcome: "ignored",
-      reason: "duplicate",
+  return withExternalKeyProcessingLock(externalKey, async () => {
+    const claimed = await repository.claimIdempotencyKey({
       idempotencyKey,
-      internalIssueId:
-        repository.findIssueLinkByExternalKey(externalKey)?.internalIssueId ||
-        null,
       externalKey,
-    };
-  }
+      externalEventId: input.event.externalEventId,
+      payloadHash,
+    });
 
-  try {
-    const existingLink = repository.findIssueLinkByExternalKey(externalKey);
-
-    let internalIssueId: string;
-    let reason: ProcessJiraWebhookEventResult["reason"];
-
-    if (input.event.eventType === "issue.created" && !existingLink) {
-      internalIssueId = await createPaperclipIssue(input.event, environment);
-      reason = "created";
-    } else if (existingLink) {
-      internalIssueId = existingLink.internalIssueId;
-      await updatePaperclipIssue(internalIssueId, input.event, environment);
-      reason = "updated";
-    } else {
-      internalIssueId = await createPaperclipIssue(input.event, environment);
-      reason = "created";
+    if (!claimed) {
+      return {
+        outcome: "ignored",
+        reason: "duplicate",
+        idempotencyKey,
+        internalIssueId:
+          repository.findIssueLinkByExternalKey(externalKey)?.internalIssueId ||
+          null,
+        externalKey,
+      };
     }
 
-    await repository.upsertIssueLink({
-      cloudId: environment.cloudId,
-      externalIssueId: input.event.issue.id,
-      externalIssueKey: input.event.issue.key,
-      internalIssueId,
-    });
+    try {
+      const existingLink = repository.findIssueLinkByExternalKey(externalKey);
 
-    await repository.markIdempotencyStatus({
-      idempotencyKey,
-      status: "processed",
-    });
+      let internalIssueId: string;
+      let reason: ProcessJiraWebhookEventResult["reason"];
 
-    await repository.recordEventLog({
-      externalEventId: input.event.externalEventId,
-      externalKey,
-      eventType: input.event.eventType,
-      status: "processed",
-      payloadHash,
-    });
+      if (input.event.eventType === "issue.created" && !existingLink) {
+        internalIssueId = await createPaperclipIssue(input.event, environment);
+        reason = "created";
+      } else if (existingLink) {
+        internalIssueId = existingLink.internalIssueId;
+        await updatePaperclipIssue(internalIssueId, input.event, environment);
+        reason = "updated";
+      } else {
+        internalIssueId = await createPaperclipIssue(input.event, environment);
+        reason = "created";
+      }
 
-    return {
-      outcome: "processed",
-      reason,
-      idempotencyKey,
-      internalIssueId,
-      externalKey,
-    };
-  } catch (error) {
-    await repository.markIdempotencyStatus({
-      idempotencyKey,
-      status: "failed",
-    });
+      await repository.upsertIssueLink({
+        cloudId: environment.cloudId,
+        externalIssueId: input.event.issue.id,
+        externalIssueKey: input.event.issue.key,
+        internalIssueId,
+      });
 
-    await repository.recordEventLog({
-      externalEventId: input.event.externalEventId,
-      externalKey,
-      eventType: input.event.eventType,
-      status: "failed",
-      payloadHash,
-      error: error instanceof Error ? error.message : "unknown error",
-    });
+      await repository.markIdempotencyStatus({
+        idempotencyKey,
+        status: "processed",
+      });
 
-    throw error;
-  }
+      await repository.recordEventLog({
+        externalEventId: input.event.externalEventId,
+        externalKey,
+        eventType: input.event.eventType,
+        status: "processed",
+        payloadHash,
+      });
+
+      return {
+        outcome: "processed",
+        reason,
+        idempotencyKey,
+        internalIssueId,
+        externalKey,
+      };
+    } catch (error) {
+      await repository.markIdempotencyStatus({
+        idempotencyKey,
+        status: "failed",
+      });
+
+      await repository.recordEventLog({
+        externalEventId: input.event.externalEventId,
+        externalKey,
+        eventType: input.event.eventType,
+        status: "failed",
+        payloadHash,
+        error: error instanceof Error ? error.message : "unknown error",
+      });
+
+      throw error;
+    }
+  });
 }

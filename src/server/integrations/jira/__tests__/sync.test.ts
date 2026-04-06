@@ -298,6 +298,111 @@ describe("processJiraWebhookEvent", () => {
     expect(snapshot.eventLogs["jira:cloud-1:10001"]?.status).toBe("processed");
   });
 
+  it("serializes concurrent events for the same Jira issue to avoid duplicate creates", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+
+    let releaseFirstCreate: (() => void) | null = null;
+    const fetchMock = vi.fn<typeof fetch>(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+
+        if (
+          url === "https://paperclip.example/api/companies/company-1/issues" &&
+          init?.method === "POST"
+        ) {
+          if (!releaseFirstCreate) {
+            await new Promise<void>((resolve) => {
+              releaseFirstCreate = resolve;
+            });
+            return new Response(JSON.stringify({ id: "MAY-401" }), {
+              status: 200,
+            });
+          }
+
+          return new Response(JSON.stringify({ id: "MAY-402" }), {
+            status: 200,
+          });
+        }
+
+        if (
+          url === "https://paperclip.example/api/issues/MAY-401" &&
+          init?.method === "PATCH"
+        ) {
+          return new Response(JSON.stringify({ id: "MAY-401" }), {
+            status: 200,
+          });
+        }
+
+        return new Response("unexpected", { status: 500 });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const createdPromise = processJiraWebhookEvent({
+      event: makeEvent({
+        eventType: "issue.created",
+        externalEventId: "evt-race-created",
+      }),
+      rawBody: JSON.stringify({ id: "payload-race-created" }),
+      repository,
+      environment: makeEnvironment(),
+    });
+
+    while (!releaseFirstCreate) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const updatedPromise = processJiraWebhookEvent({
+      event: makeEvent({
+        eventType: "issue.updated",
+        externalEventId: "evt-race-updated",
+        issue: {
+          ...makeEvent().issue,
+          status: "In Progress",
+        },
+        changes: [
+          {
+            fieldId: "status",
+            field: "status",
+            from: "10000",
+            to: "10001",
+            fromString: "To Do",
+            toString: "In Progress",
+          },
+        ],
+      }),
+      rawBody: JSON.stringify({ id: "payload-race-updated" }),
+      repository,
+      environment: makeEnvironment(),
+    });
+
+    releaseFirstCreate();
+
+    const [createdResult, updatedResult] = await Promise.all([
+      createdPromise,
+      updatedPromise,
+    ]);
+    expect(createdResult.reason).toBe("created");
+    expect(updatedResult.reason).toBe("updated");
+
+    const createCalls = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url) === "https://paperclip.example/api/companies/company-1/issues" &&
+        init?.method === "POST",
+    );
+    const patchCalls = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url) === "https://paperclip.example/api/issues/MAY-401" &&
+        init?.method === "PATCH",
+    );
+
+    expect(createCalls).toHaveLength(1);
+    expect(patchCalls).toHaveLength(1);
+  });
+
   it("marks idempotency/event logs as failed on API errors", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
     const repository = await JiraStorageRepository.create({

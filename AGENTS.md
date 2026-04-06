@@ -22,6 +22,12 @@ Always read the Paperclip issue **Objective / Worktree** lines: if they still sa
 - **deep-agent-lab:** `cd <DeepConsole>/apps/deep-agent-lab && pnpm build && pnpm test` (and `pnpm test:e2e` when the ticket asks).
 - **bridge app:** `cd <this-repo> && pnpm build && pnpm test`.
 
+## Jira Planner API (local)
+
+Paperclip **Jira Planner** creates issues via `POST /integrations/jira/tasks` on this bridge. The dev server URL is not always port 3000—use the base URL your operator gives you (for example `http://localhost:9997`). In `pnpm dev`, Bearer auth may be omitted; in `pnpm start`, send `Authorization: Bearer` using `JIRA_PLANNER_SECRET` (or the documented fallbacks).
+
+A Paperclip issue id like `MAY-1035` is **not** necessarily the Jira `projectKey`. Set `projectKey` from the bridge env (`JIRA_PLANNER_DEFAULT_PROJECT_KEY`) or from the Jira project you intend to file in—do not infer it from the Paperclip identifier prefix alone.
+
 ## Paperclip
 
 Use the Paperclip skill: checkout before edits, `X-Paperclip-Run-Id` on mutations, ticket links with the company prefix in comments.
