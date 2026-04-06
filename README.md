@@ -14,10 +14,11 @@
 
 ### 이 레포는 정확히 뭐 하는 건가요?
 
-- **Jira → Paperclip** 방향만 다룹니다. Jira에서 바뀐 내용을 읽어서 Paperclip 이슈를 **없으면 만들고, 있으면 갱신**합니다.
-- **Paperclip → Jira** 로 상태나 코멘트를 **자동으로 되돌려 주지는 않**습니다. Jira 쪽을 맞추려면 사람이 하거나, 다른 자동화를 쓰면 됩니다.
+- **Jira → Paperclip(폴링)** : Jira에서 바뀐 내용을 읽어서 Paperclip 이슈를 **없으면 만들고, 있으면 갱신**합니다.
+- **Paperclip / 자동화 → Jira(플래너)** : `POST /integrations/jira/tasks` 로 **Jira 이슈를 새로 만드는** 경로가 있습니다. 요약·요구사항·`spec`을 받아 Jira 설명(ADF) 섹션으로 정리해 넣습니다.
+- **Paperclip → Jira** 로 **상태·코멘트·첨부·서브태스크를 자동 동기화**하지는 않습니다. 폴링·플래너 **밖의** 양방향 보드 동기화는 이 레포 범위가 아닙니다.
 
-즉, Jira를 없애는 게 아니라 **“티켓의 출처는 Jira, 실행·에이전트 작업은 Paperclip”** 처럼 역할을 나누는 **일방향 연동 브리지**라고 보면 됩니다.
+즉, Jira를 없애는 게 아니라 **“티켓의 출처는 Jira, 실행·에이전트 작업은 Paperclip”** 처럼 역할을 나누는 브리지에, **기획/에이전트가 Jira 백로그에 티켓을 올리는** 플래너 API를 더한 형태입니다.
 
 ---
 
@@ -32,8 +33,9 @@ pnpm dev
 - 앱: **`http://localhost:9997`** (`pnpm dev` / `pnpm start` 기본 포트)
 - 폴링: **`GET` 또는 `POST /integrations/jira/poll`**
 - 플래너 이슈 생성: **`POST /integrations/jira/tasks`**
-- **배포·`pnpm start`:** `Authorization: Bearer` 토큰 필요. 값은 **`CRON_SECRET`**(있으면 이걸 사용) 또는 **`JIRA_POLL_SECRET`**
-- **`pnpm dev`:** Bearer 없이 호출 가능
+- **배포·`pnpm start` — 폴링:** Bearer 필수. 시크릿은 **`CRON_SECRET`**(있으면 우선) 또는 **`JIRA_POLL_SECRET`**
+- **배포·`pnpm start` — 플래너:** Bearer 필수. 시크릿 우선순위는 **`JIRA_PLANNER_SECRET` → `CRON_SECRET` → `JIRA_POLL_SECRET`**
+- **`pnpm dev`:** 폴링·플래너 모두 Bearer 생략 가능(`NODE_ENV=development`일 때만)
 - URL 쿼리(덮어쓰기용, 생략 가능): `jql`, `extraJql` (`JIRA_POLL_JQL` 대신 한 번만 바꿀 때)
 
 ```bash
@@ -69,6 +71,20 @@ curl -sS -X POST https://<배포도메인>/integrations/jira/tasks \
     "spec":{"acceptanceCriteria":["Jira issue가 생성된다"]}
   }'
 ```
+
+**요청 필드(서버 검증 기준):** `summary`는 **필수**, 길이 **3~255**. 그 외 `requirements`, `projectKey`, `issueType`, `labels`, `assigneeAccountId`(Jira Cloud account id), `spec` 은 선택입니다. `projectKey`를 생략하면 환경 변수 **`JIRA_PLANNER_DEFAULT_PROJECT_KEY`** 가 있어야 Jira 쪽 생성이 됩니다.
+
+**`spec` → Jira 본문(ADF) 섹션 순서:** Objective → Context(선택: 본문 + 하위 **Raw Requirements**) → In Scope → Out of Scope → Acceptance Criteria → Technical Notes → Verification → Owner Next Action. `spec.objective`가 없으면 `summary`가 Objective 문단으로 쓰입니다.
+
+**응답·오류:**
+
+| 코드    | 의미                                                                                                                                   |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **201** | `{ "ok": true, "issue": { "id", "key", "url" } }` — 다운스트림 자동화는 **`issue.key` / `issue.id` / `issue.url`** 를 사용하면 됩니다. |
+| **400** | JSON 파싱 실패 또는 검증 실패 — `{ "error": "<message>" }`                                                                             |
+| **401** | Bearer 누락·불일치(개발 모드 제외)                                                                                                     |
+| **500** | 예: 프로덕션에서 플래너용 시크릿이 전혀 설정되지 않음 — `{ "error": "<message>" }`                                                     |
+| **502** | Jira 생성 실패 등 상류 오류 — `{ "ok": false, "error": "<message>" }`                                                                  |
 
 로컬(`pnpm dev`)은 Bearer 없이:
 
@@ -116,9 +132,11 @@ Vercel Cron에는 **`CRON_SECRET`**을 넣으면 요청 Bearer와 맞출 수 있
 | `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_ID`      | Jira에서 **처음** Paperclip으로 넘어온 이슈에만, 지정한 에이전트를 **담당으로 붙일 때** 씁니다. 이미 있는 이슈 갱신에는 영향 없습니다.                                                                                                           |
 | `JIRA_PAPERCLIP_NEW_ISSUE_ASSIGNEE_AGENT_URL_KEY` | 위 ID를 모를 때, Paperclip API로 에이전트 목록을 받아와 **`urlKey`가 같은 에이전트**를 찾습니다. **안 적으면** 기본으로 `jira-controller`를 찾습니다. **빈 문자열 `""`로 두면** 이 검색 자체를 하지 않습니다(에이전트 자동 배정이 필요 없을 때). |
 | `JIRA_STORAGE_FILE`                               | Jira↔Paperclip 연동 상태(매핑·멱등 등)를 저장하는 **SQLite 파일 경로**입니다. Vercel 같은 서버리스에서는 기본 경로가 쓰기 불가할 수 있어서, **쓰기 가능한 경로**를 꼭 지정해 주세요.                                                             |
-| `JIRA_PLANNER_SECRET`                             | `POST /integrations/jira/tasks` 인증 Bearer입니다. 없으면 `CRON_SECRET` → `JIRA_POLL_SECRET` 순서로 fallback 합니다.                                                                                                                             |
+| `JIRA_PLANNER_SECRET`                             | `POST /integrations/jira/tasks` 전용 Bearer(권장). 없으면 `CRON_SECRET` → `JIRA_POLL_SECRET` 순으로 같은 헤더 검증에 쓰입니다.                                                                                                                   |
 | `JIRA_PLANNER_DEFAULT_PROJECT_KEY`                | planner payload에 `projectKey`가 없을 때 Jira 이슈를 생성할 기본 프로젝트 key입니다.                                                                                                                                                             |
 | `JIRA_PLANNER_DEFAULT_ISSUE_TYPE`                 | planner payload에 `issueType`이 없을 때 Jira 이슈 타입 기본값입니다(기본 `Task`).                                                                                                                                                                |
+| `JIRA_PLANNER_DEFAULT_ASSIGNEE_ACCOUNT_ID`        | 플래너로 만드는 이슈에 넣을 **기본 담당자**(Jira Cloud `accountId`). 요청 본문 `assigneeAccountId`가 있으면 본문이 우선입니다.                                                                                                                   |
+| `JIRA_PLANNER_ASSIGN_TO_API_USER`                 | `1` 또는 `true`이면, 담당자가 아직 없을 때 Jira `GET .../myself`로 토큰 소유자 `accountId`를 조회해 담당자로 넣습니다(이미 지정돼 있으면 호출하지 않음).                                                                                         |
 | `JIRA_ATLASSIAN_API_BASE_URL`                     | Atlassian API 베이스 URL override입니다(기본 `https://api.atlassian.com`). 로컬 E2E mock에서 사용합니다.                                                                                                                                         |
 
 ---
