@@ -78,13 +78,23 @@ curl -sS http://localhost:9997/integrations/jira/poll
 
 Vercel Cron에는 **`CRON_SECRET`**을 넣으면 요청 Bearer와 맞출 수 있습니다.
 
-로컬에서 `pnpm start`로 띄운 뒤 **cron/systemd** 등으로 폴링할 때(프로덕션과 동일·Bearer 필요):
+로컬에서 **cron**으로 폴링할 때는 **`scripts/jira-poll-local-cron.sh`** 를 쓰는 편이 안전합니다. JQL에 `%`가 들어가는 URL 인코딩을 crontab 한 줄에 넣으면, cron이 `%`를 특수 문자로 잘라 내서 명령이 깨질 수 있습니다. 스크립트는 `curl -G`와 `--data-urlencode`로 평문 JQL을 넘깁니다.
 
 ```bash
-*/5 * * * * curl -fsS -H "Authorization: Bearer $JIRA_POLL_SECRET" http://127.0.0.1:9997/integrations/jira/poll >/dev/null
+chmod +x scripts/jira-poll-local-cron.sh
+# crontab에는 저장소 절대 경로로 지정
+*/5 * * * * /절대/경로/papaclip-jira-kdl/scripts/jira-poll-local-cron.sh
 ```
 
-(`pnpm dev`는 poll Bearer를 생략해도 되므로, 위 예시에서 `-H` 줄만 빼면 됩니다.)
+JQL·URL·로그 경로는 환경 변수로 바꿀 수 있습니다(`.env.example` 주석 참고): `JIRA_POLL_CRON_JQL`, `JIRA_POLL_CRON_BASE_URL`, `JIRA_POLL_CRON_LOG`. cron 환경에는 `.env.local`이 자동으로 안 잡히므로, 필요하면 crontab 상단에 `JIRA_POLL_CRON_JQL=...` 처럼 넣거나 래퍼에서 `export` 하면 됩니다.
+
+`pnpm start`로 띄운 뒤 돌릴 때는 **`JIRA_POLL_SECRET`** 또는 **`CRON_SECRET`** 을 스크립트 환경에 넣어야 합니다. `pnpm dev`는 poll Bearer를 생략해도 됩니다.
+
+한 줄 `curl` 예시(쿼리에 `%`가 없을 때만):
+
+```bash
+*/5 * * * * /usr/bin/curl -fsS -H "Authorization: Bearer $JIRA_POLL_SECRET" http://127.0.0.1:9997/integrations/jira/poll >/dev/null
+```
 
 ---
 
