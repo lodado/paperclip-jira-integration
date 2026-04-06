@@ -86,6 +86,16 @@ chmod +x scripts/jira-poll-local-cron.sh
 */5 * * * * /절대/경로/papaclip-jira-kdl/scripts/jira-poll-local-cron.sh
 ```
 
+**macOS:** 레포가 **Desktop·문서·다운로드** 등 보호 구역 아래에 있으면, `cron`이 스크립트를 실행할 때 **`Operation not permitted`** 로 막히는 경우가 많습니다. (`mail` 또는 `/var/mail/$USER`에 Cron Daemon 메일로 옵니다.)  
+**권장:** 스크립트를 Library 쪽으로 복사한 뒤 crontab은 그 경로만 가리키세요.
+
+```bash
+sh scripts/install-macos-user-cron.sh
+# 출력된 한 줄을 crontab -e 에 붙여 넣기 (레포 경로 대신 Library 경로 사용)
+```
+
+대안으로 시스템 설정 → 개인정보 보호 및 보안 → **전체 디스크 접근 권한**에 **`/usr/sbin/cron`** 을 추가하는 방법도 있지만, 복사 방식이 설정이 단순합니다. 스크립트 내용을 바꾼 뒤에는 `install-macos-user-cron.sh` 를 다시 실행해 복사본을 갱신하세요.
+
 JQL·URL·로그 경로는 환경 변수로 바꿀 수 있습니다(`.env.example` 주석 참고): `JIRA_POLL_CRON_JQL`, `JIRA_POLL_CRON_BASE_URL`, `JIRA_POLL_CRON_LOG`. cron 환경에는 `.env.local`이 자동으로 안 잡히므로, 필요하면 crontab 상단에 `JIRA_POLL_CRON_JQL=...` 처럼 넣거나 래퍼에서 `export` 하면 됩니다.
 
 `pnpm start`로 띄운 뒤 돌릴 때는 **`JIRA_POLL_SECRET`** 또는 **`CRON_SECRET`** 을 스크립트 환경에 넣어야 합니다. `pnpm dev`는 poll Bearer를 생략해도 됩니다.
