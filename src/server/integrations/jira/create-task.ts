@@ -15,6 +15,8 @@ export type CreateJiraTaskInput = {
   projectKey?: string;
   issueType?: string;
   labels?: string[];
+  /** Jira Cloud account id (REST v3 create `fields.assignee.accountId`) */
+  assigneeAccountId?: string;
   spec?: JiraPlannerSpecSections;
 };
 
@@ -25,6 +27,13 @@ export type JiraCreateTaskEnvironment = {
   defaultProjectKey: string | null;
   defaultIssueType: string;
   apiBaseUrl: string;
+  /** When set, new issues include `assignee.accountId` unless the request overrides it */
+  defaultAssigneeAccountId: string | null;
+  /**
+   * When true, resolves assignee via `GET .../rest/api/3/myself` (API token owner).
+   * Ignored if request or `defaultAssigneeAccountId` already supplies an assignee.
+   */
+  assignToApiUser: boolean;
 };
 
 export type JiraTaskCreateResult = {
@@ -96,9 +105,7 @@ export function resolveJiraCreateTaskEnvironment(): JiraCreateTaskEnvironment {
     throw new Error("JIRA_ATLASSIAN_EMAIL or ATLASSIAN_EMAIL is required");
   }
   if (!apiToken) {
-    throw new Error(
-      "JIRA_ATLASSIAN_API_TOKEN or JIRA_API_TOKEN is required",
-    );
+    throw new Error("JIRA_ATLASSIAN_API_TOKEN or JIRA_API_TOKEN is required");
   }
   if (!cloudId) {
     throw new Error("JIRA_CLOUD_ID is required");
@@ -108,6 +115,11 @@ export function resolveJiraCreateTaskEnvironment(): JiraCreateTaskEnvironment {
     process.env.JIRA_PLANNER_DEFAULT_PROJECT_KEY?.trim() || null;
   const defaultIssueType =
     process.env.JIRA_PLANNER_DEFAULT_ISSUE_TYPE?.trim() || "Task";
+  const defaultAssigneeAccountId =
+    process.env.JIRA_PLANNER_DEFAULT_ASSIGNEE_ACCOUNT_ID?.trim() || null;
+  const assignToApiUser =
+    process.env.JIRA_PLANNER_ASSIGN_TO_API_USER === "true" ||
+    process.env.JIRA_PLANNER_ASSIGN_TO_API_USER === "1";
 
   const apiBaseUrl = (
     process.env.JIRA_ATLASSIAN_API_BASE_URL?.trim() ||
@@ -121,6 +133,8 @@ export function resolveJiraCreateTaskEnvironment(): JiraCreateTaskEnvironment {
     defaultProjectKey,
     defaultIssueType,
     apiBaseUrl,
+    defaultAssigneeAccountId,
+    assignToApiUser,
   };
 }
 
@@ -130,6 +144,36 @@ function basicAuthorizationHeader(params: {
 }): string {
   const raw = `${params.email}:${params.apiToken}`;
   return `Basic ${Buffer.from(raw, "utf8").toString("base64")}`;
+}
+
+async function fetchMyselfAccountId(params: {
+  environment: JiraCreateTaskEnvironment;
+  fetchImpl: typeof fetch;
+}): Promise<string> {
+  const { environment, fetchImpl } = params;
+  const url = `${environment.apiBaseUrl}/ex/jira/${encodeURIComponent(environment.cloudId)}/rest/api/3/myself`;
+
+  const response = await fetchImpl(url, {
+    headers: {
+      Accept: "application/json",
+      Authorization: basicAuthorizationHeader(environment),
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Jira myself lookup failed (${response.status}): ${text || "unknown"}`,
+    );
+  }
+
+  const body = (await response.json()) as { accountId?: unknown };
+  const accountId = toTrimmed(body.accountId);
+  if (!accountId) {
+    throw new Error("Jira myself response missing accountId");
+  }
+
+  return accountId;
 }
 
 function paragraph(text: string): JiraAdfNode {
@@ -237,6 +281,7 @@ export function validateCreateJiraTaskInput(
       projectKey: toTrimmed(input.projectKey) || undefined,
       issueType: toTrimmed(input.issueType) || undefined,
       labels: uniqueNonEmpty(input.labels),
+      assigneeAccountId: toTrimmed(input.assigneeAccountId) || undefined,
       spec: {
         objective: toTrimmed(input.spec?.objective) || undefined,
         context: toTrimmed(input.spec?.context) || undefined,
@@ -266,14 +311,33 @@ export async function createJiraTask(params: {
     );
   }
 
-  const payload: Record<string, unknown> = {
-    fields: {
-      project: { key: projectKey },
-      issuetype: { name: params.input.issueType || environment.defaultIssueType },
-      summary: params.input.summary,
-      description: buildPlannerDescriptionAdf(params.input),
-      ...(params.input.labels?.length ? { labels: params.input.labels } : {}),
+  let assigneeAccountId =
+    toTrimmed(params.input.assigneeAccountId) ||
+    environment.defaultAssigneeAccountId ||
+    null;
+
+  if (!assigneeAccountId && environment.assignToApiUser) {
+    assigneeAccountId = await fetchMyselfAccountId({
+      environment,
+      fetchImpl,
+    });
+  }
+
+  const fields: Record<string, unknown> = {
+    project: { key: projectKey },
+    issuetype: {
+      name: params.input.issueType || environment.defaultIssueType,
     },
+    summary: params.input.summary,
+    description: buildPlannerDescriptionAdf(params.input),
+    ...(params.input.labels?.length ? { labels: params.input.labels } : {}),
+    ...(assigneeAccountId
+      ? { assignee: { accountId: assigneeAccountId } }
+      : {}),
+  };
+
+  const payload: Record<string, unknown> = {
+    fields,
   };
 
   const url = `${environment.apiBaseUrl}/ex/jira/${encodeURIComponent(environment.cloudId)}/rest/api/3/issue`;

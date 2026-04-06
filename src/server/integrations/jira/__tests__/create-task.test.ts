@@ -19,6 +19,17 @@ describe("validateCreateJiraTaskInput", () => {
       false,
     );
   });
+
+  it("accepts optional assigneeAccountId", () => {
+    const parsed = validateCreateJiraTaskInput({
+      summary: "abc",
+      assigneeAccountId: "  acc-1  ",
+    });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.assigneeAccountId).toBe("acc-1");
+    }
+  });
 });
 
 describe("buildPlannerDescriptionAdf", () => {
@@ -50,6 +61,8 @@ describe("createJiraTask", () => {
     defaultProjectKey: "MAY",
     defaultIssueType: "Task",
     apiBaseUrl: "https://api.atlassian.com",
+    defaultAssigneeAccountId: null,
+    assignToApiUser: false,
   };
 
   it("creates Jira issue with default project key", async () => {
@@ -99,6 +112,73 @@ describe("createJiraTask", () => {
       }),
     ).rejects.toThrow(/projectKey is required/);
   });
+
+  it("includes assignee when assigneeAccountId is provided", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const fields = body.fields as Record<string, unknown>;
+      expect(fields.assignee).toEqual({
+        accountId: "acc-123",
+      });
+
+      return new Response(
+        JSON.stringify({
+          id: "10001",
+          key: "MAY-102",
+          self: "https://example.atlassian.net/browse/MAY-102",
+        }),
+        { status: 201 },
+      );
+    });
+
+    await createJiraTask({
+      input: {
+        summary: "Assigned task",
+        assigneeAccountId: "acc-123",
+      },
+      environment,
+      fetchImpl: fetchMock,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves assignee from myself when assignToApiUser is true", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+
+      if (url.includes("/rest/api/3/myself")) {
+        expect(init?.method).toBeUndefined();
+        return new Response(JSON.stringify({ accountId: "me-acc" }), {
+          status: 200,
+        });
+      }
+
+      if (url.includes("/rest/api/3/issue")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        const fields = body.fields as Record<string, unknown>;
+        expect(fields.assignee).toEqual({ accountId: "me-acc" });
+        return new Response(
+          JSON.stringify({
+            id: "10001",
+            key: "MAY-103",
+            self: "https://example.atlassian.net/browse/MAY-103",
+          }),
+          { status: 201 },
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    await createJiraTask({
+      input: { summary: "Auto-assign to token user" },
+      environment: { ...environment, assignToApiUser: true },
+      fetchImpl: fetchMock,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("resolveJiraCreateTaskEnvironment", () => {
@@ -109,11 +189,15 @@ describe("resolveJiraCreateTaskEnvironment", () => {
     vi.stubEnv("JIRA_PLANNER_DEFAULT_PROJECT_KEY", "MAY");
     vi.stubEnv("JIRA_PLANNER_DEFAULT_ISSUE_TYPE", "Story");
     vi.stubEnv("JIRA_ATLASSIAN_API_BASE_URL", "https://api.example.com/");
+    vi.stubEnv("JIRA_PLANNER_DEFAULT_ASSIGNEE_ACCOUNT_ID", "acc-default");
+    vi.stubEnv("JIRA_PLANNER_ASSIGN_TO_API_USER", "true");
 
     const env = resolveJiraCreateTaskEnvironment();
     expect(env.defaultProjectKey).toBe("MAY");
     expect(env.defaultIssueType).toBe("Story");
     expect(env.apiBaseUrl).toBe("https://api.example.com");
+    expect(env.defaultAssigneeAccountId).toBe("acc-default");
+    expect(env.assignToApiUser).toBe(true);
 
     vi.unstubAllEnvs();
   });
