@@ -72,6 +72,25 @@ const DEFAULT_NEW_ISSUE_ASSIGNEE_URL_KEY = "jira-controller";
 const assigneeLookupCache = new Map<string, string>();
 const externalKeyProcessingQueue = new Map<string, Promise<void>>();
 
+class PaperclipApiError extends Error {
+  readonly method: string;
+  readonly path: string;
+  readonly status: number;
+
+  constructor(params: {
+    method: string;
+    path: string;
+    status: number;
+    message: string;
+  }) {
+    super(params.message);
+    this.name = "PaperclipApiError";
+    this.method = params.method;
+    this.path = params.path;
+    this.status = params.status;
+  }
+}
+
 function toNormalizedLookupKey(
   value: string | null | undefined,
 ): string | null {
@@ -377,6 +396,7 @@ async function fetchPaperclipJson<T>(
   path: string,
   init: RequestInit,
 ): Promise<T> {
+  const method = init.method || "GET";
   const response = await fetch(`${environment.apiUrl}${path}`, {
     ...init,
     headers: {
@@ -388,9 +408,12 @@ async function fetchPaperclipJson<T>(
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(
-      `Paperclip API ${init.method || "GET"} ${path} failed (${response.status}): ${message || "unknown"}`,
-    );
+    throw new PaperclipApiError({
+      method,
+      path,
+      status: response.status,
+      message: `Paperclip API ${method} ${path} failed (${response.status}): ${message || "unknown"}`,
+    });
   }
 
   return (await response.json()) as T;
@@ -561,6 +584,18 @@ async function updatePaperclipIssue(
   );
 }
 
+function isMissingPaperclipIssueError(
+  error: unknown,
+  internalIssueId: string,
+): boolean {
+  return (
+    error instanceof PaperclipApiError &&
+    error.status === 404 &&
+    error.method === "PATCH" &&
+    error.path === `/api/issues/${internalIssueId}`
+  );
+}
+
 export async function processJiraWebhookEvent(
   input: ProcessJiraWebhookEventInput,
 ): Promise<ProcessJiraWebhookEventResult> {
@@ -604,8 +639,16 @@ export async function processJiraWebhookEvent(
         reason = "created";
       } else if (existingLink) {
         internalIssueId = existingLink.internalIssueId;
-        await updatePaperclipIssue(internalIssueId, input.event, environment);
-        reason = "updated";
+        try {
+          await updatePaperclipIssue(internalIssueId, input.event, environment);
+          reason = "updated";
+        } catch (error) {
+          if (!isMissingPaperclipIssueError(error, internalIssueId)) {
+            throw error;
+          }
+          internalIssueId = await createPaperclipIssue(input.event, environment);
+          reason = "created";
+        }
       } else {
         internalIssueId = await createPaperclipIssue(input.event, environment);
         reason = "created";

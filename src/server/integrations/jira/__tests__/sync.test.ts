@@ -185,6 +185,74 @@ describe("processJiraWebhookEvent", () => {
     expect(body).not.toHaveProperty("assigneeAgentId");
   });
 
+  it("recreates and relinks when an existing linked issue returns 404 on update", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+    await repository.upsertIssueLink({
+      cloudId: "cloud-1",
+      externalIssueId: "10001",
+      externalIssueKey: "PROJ-1",
+      internalIssueId: "MAY-MISSING",
+    });
+
+    const event = makeEvent({
+      eventType: "issue.updated",
+      externalEventId: "evt-stale-link",
+      issue: {
+        ...makeEvent().issue,
+        status: "Done",
+      },
+      changes: [
+        {
+          fieldId: "status",
+          field: "status",
+          from: "10000",
+          to: "10001",
+          fromString: "To Do",
+          toString: "Done",
+        },
+      ],
+    });
+
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://paperclip.example/api/issues/MAY-MISSING") {
+        return new Response(JSON.stringify({ error: "Issue not found" }), {
+          status: 404,
+        });
+      }
+      if (url === "https://paperclip.example/api/companies/company-1/issues") {
+        return new Response(JSON.stringify({ id: "MAY-NEW" }), { status: 200 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await processJiraWebhookEvent({
+      event,
+      rawBody: JSON.stringify({ id: "payload-stale-link" }),
+      repository,
+      environment: makeEnvironment(),
+    });
+
+    expect(result.outcome).toBe("processed");
+    expect(result.reason).toBe("created");
+    expect(result.internalIssueId).toBe("MAY-NEW");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://paperclip.example/api/issues/MAY-MISSING",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://paperclip.example/api/companies/company-1/issues",
+    );
+    expect(
+      repository.getSnapshot().externalIssueLinks["jira:cloud-1:10001"]
+        ?.internalIssueId,
+    ).toBe("MAY-NEW");
+  });
+
   it("sets assigneeAgentId on create when newIssueAssigneeAgentId is configured", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
     const repository = await JiraStorageRepository.create({
