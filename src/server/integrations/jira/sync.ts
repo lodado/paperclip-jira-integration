@@ -544,9 +544,13 @@ function buildUpdatePayload(
 async function createPaperclipIssue(
   event: JiraWebhookNormalizedEvent,
   environment: JiraSyncEnvironment,
+  overrides?: UpdateIssuePayload,
 ): Promise<string> {
   const assigneeAgentId = await resolveNewIssueAssigneeAgentId(environment);
-  const body = buildCreatePayload(event, environment, assigneeAgentId);
+  const body = {
+    ...buildCreatePayload(event, environment, assigneeAgentId),
+    ...(overrides || {}),
+  };
   const created = await fetchPaperclipJson<PaperclipIssueResponse>(
     environment,
     `/api/companies/${environment.companyId}/issues`,
@@ -646,7 +650,11 @@ export async function processJiraWebhookEvent(
           if (!isMissingPaperclipIssueError(error, internalIssueId)) {
             throw error;
           }
-          internalIssueId = await createPaperclipIssue(input.event, environment);
+          internalIssueId = await createPaperclipIssue(
+            input.event,
+            environment,
+            buildUpdatePayload(input.event, environment),
+          );
           reason = "created";
         }
       } else {

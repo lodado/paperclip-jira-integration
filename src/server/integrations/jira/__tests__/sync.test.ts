@@ -247,6 +247,14 @@ describe("processJiraWebhookEvent", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "https://paperclip.example/api/companies/company-1/issues",
     );
+    const recreatedBody = JSON.parse(
+      String(fetchMock.mock.calls[1]?.[1]?.body),
+    ) as Record<string, string>;
+    expect(recreatedBody).toEqual(
+      expect.objectContaining({
+        status: "done",
+      }),
+    );
     expect(
       repository.getSnapshot().externalIssueLinks["jira:cloud-1:10001"]
         ?.internalIssueId,
