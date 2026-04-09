@@ -250,7 +250,8 @@ describe("processJiraWebhookEvent", () => {
 
     const createCall = fetchMock.mock.calls.find(
       ([url]) =>
-        String(url) === "https://paperclip.example/api/companies/company-1/issues",
+        String(url) ===
+        "https://paperclip.example/api/companies/company-1/issues",
     );
     expect(createCall).toBeDefined();
     const createBody = JSON.parse(String(createCall?.[1]?.body)) as Record<
@@ -390,7 +391,8 @@ describe("processJiraWebhookEvent", () => {
 
     const createCalls = fetchMock.mock.calls.filter(
       ([url, init]) =>
-        String(url) === "https://paperclip.example/api/companies/company-1/issues" &&
+        String(url) ===
+          "https://paperclip.example/api/companies/company-1/issues" &&
         init?.method === "POST",
     );
     const patchCalls = fetchMock.mock.calls.filter(
@@ -403,7 +405,7 @@ describe("processJiraWebhookEvent", () => {
     expect(patchCalls).toHaveLength(1);
   });
 
-  it("marks idempotency/event logs as failed on API errors", async () => {
+  it("does not persist link or logs when Paperclip create fails; drops idempotency claim", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
     const repository = await JiraStorageRepository.create({
       storeFilePath: path.join(tmpDir, "storage.json"),
@@ -428,10 +430,54 @@ describe("processJiraWebhookEvent", () => {
     );
 
     const snapshot = repository.getSnapshot();
-    const idempotencyEntries = Object.values(snapshot.idempotency);
+    expect(Object.values(snapshot.idempotency)).toHaveLength(0);
+    expect(snapshot.externalIssueLinks["jira:cloud-1:10001"]).toBeUndefined();
+    expect(snapshot.eventLogs["jira:cloud-1:10001"]).toBeUndefined();
+  });
 
-    expect(idempotencyEntries).toHaveLength(1);
-    expect(idempotencyEntries[0]?.status).toBe("failed");
-    expect(snapshot.eventLogs["jira:cloud-1:10001"]?.status).toBe("failed");
+  it("does not touch issue link or event log when update payload is empty (no Paperclip PATCH)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-sync-"));
+    const repository = await JiraStorageRepository.create({
+      storeFilePath: path.join(tmpDir, "storage.json"),
+    });
+    await repository.upsertIssueLink({
+      cloudId: "cloud-1",
+      externalIssueId: "10001",
+      externalIssueKey: "PROJ-1",
+      internalIssueId: "MAY-200",
+    });
+
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const event = makeEvent({
+      eventType: "issue.updated",
+      changes: [
+        {
+          fieldId: "labels",
+          field: "labels",
+          from: null,
+          to: null,
+          fromString: "",
+          toString: "x",
+        },
+      ],
+    });
+
+    const result = await processJiraWebhookEvent({
+      event,
+      rawBody: JSON.stringify({ id: "payload-labels-only" }),
+      repository,
+      environment: makeEnvironment(),
+    });
+
+    expect(result.outcome).toBe("processed");
+    expect(result.reason).toBe("unchanged");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const snapshot = repository.getSnapshot();
+    expect(snapshot.eventLogs["jira:cloud-1:10001"]).toBeUndefined();
+    expect(Object.values(snapshot.idempotency)).toHaveLength(1);
+    expect(Object.values(snapshot.idempotency)[0]?.status).toBe("processed");
   });
 });

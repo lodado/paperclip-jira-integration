@@ -316,6 +316,21 @@ export class JiraStorageRepository {
     });
   }
 
+  /** Removes an idempotency row (e.g. after Paperclip failure so the event can retry). */
+  async deleteIdempotencyKey(idempotencyKey: string): Promise<void> {
+    return this.withWriteLock(async () => {
+      const key = idempotencyKey.trim();
+      if (!key || !this.snapshot.idempotency[key]) {
+        return;
+      }
+
+      this.database
+        .prepare("DELETE FROM idempotency WHERE idempotency_key = ?")
+        .run(key);
+      delete this.snapshot.idempotency[key];
+    });
+  }
+
   async recordEventLog(
     input: RecordJiraEventLogInput,
   ): Promise<JiraIntegrationEventLog> {

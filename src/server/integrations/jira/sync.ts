@@ -41,7 +41,7 @@ export type ProcessJiraWebhookEventInput = {
 
 export type ProcessJiraWebhookEventResult = {
   outcome: "processed" | "ignored";
-  reason: "created" | "updated" | "duplicate";
+  reason: "created" | "updated" | "unchanged" | "duplicate";
   idempotencyKey: string;
   internalIssueId: string | null;
   externalKey: string;
@@ -357,7 +357,10 @@ async function withExternalKeyProcessingLock<T>(
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
-  externalKeyProcessingQueue.set(key, previous.then(() => current));
+  externalKeyProcessingQueue.set(
+    key,
+    previous.then(() => current),
+  );
 
   await previous;
 
@@ -541,14 +544,15 @@ async function createPaperclipIssue(
   return internalIssueId;
 }
 
+/** @returns true if a PATCH was sent and completed successfully */
 async function updatePaperclipIssue(
   internalIssueId: string,
   event: JiraWebhookNormalizedEvent,
   environment: JiraSyncEnvironment,
-): Promise<void> {
+): Promise<boolean> {
   const body = buildUpdatePayload(event, environment);
   if (Object.keys(body).length === 0) {
-    return;
+    return false;
   }
 
   await fetchPaperclipJson<PaperclipIssueResponse>(
@@ -559,6 +563,7 @@ async function updatePaperclipIssue(
       body: JSON.stringify(body),
     },
   );
+  return true;
 }
 
 export async function processJiraWebhookEvent(
@@ -598,37 +603,46 @@ export async function processJiraWebhookEvent(
 
       let internalIssueId: string;
       let reason: ProcessJiraWebhookEventResult["reason"];
+      let paperclipMutated = false;
 
       if (input.event.eventType === "issue.created" && !existingLink) {
         internalIssueId = await createPaperclipIssue(input.event, environment);
         reason = "created";
+        paperclipMutated = true;
       } else if (existingLink) {
         internalIssueId = existingLink.internalIssueId;
-        await updatePaperclipIssue(internalIssueId, input.event, environment);
-        reason = "updated";
+        paperclipMutated = await updatePaperclipIssue(
+          internalIssueId,
+          input.event,
+          environment,
+        );
+        reason = paperclipMutated ? "updated" : "unchanged";
       } else {
         internalIssueId = await createPaperclipIssue(input.event, environment);
         reason = "created";
+        paperclipMutated = true;
       }
 
-      await repository.upsertIssueLink({
-        cloudId: environment.cloudId,
-        externalIssueId: input.event.issue.id,
-        externalIssueKey: input.event.issue.key,
-        internalIssueId,
-      });
+      if (paperclipMutated) {
+        await repository.upsertIssueLink({
+          cloudId: environment.cloudId,
+          externalIssueId: input.event.issue.id,
+          externalIssueKey: input.event.issue.key,
+          internalIssueId,
+        });
+
+        await repository.recordEventLog({
+          externalEventId: input.event.externalEventId,
+          externalKey,
+          eventType: input.event.eventType,
+          status: "processed",
+          payloadHash,
+        });
+      }
 
       await repository.markIdempotencyStatus({
         idempotencyKey,
         status: "processed",
-      });
-
-      await repository.recordEventLog({
-        externalEventId: input.event.externalEventId,
-        externalKey,
-        eventType: input.event.eventType,
-        status: "processed",
-        payloadHash,
       });
 
       return {
@@ -639,20 +653,7 @@ export async function processJiraWebhookEvent(
         externalKey,
       };
     } catch (error) {
-      await repository.markIdempotencyStatus({
-        idempotencyKey,
-        status: "failed",
-      });
-
-      await repository.recordEventLog({
-        externalEventId: input.event.externalEventId,
-        externalKey,
-        eventType: input.event.eventType,
-        status: "failed",
-        payloadHash,
-        error: error instanceof Error ? error.message : "unknown error",
-      });
-
+      await repository.deleteIdempotencyKey(idempotencyKey);
       throw error;
     }
   });
